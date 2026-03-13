@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/promoter-crm",
+  "version": "2026.3.12",
+  "private": true,
+  "description": "OpenClaw promoter CRM plugin with a normalized SQLite schema",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

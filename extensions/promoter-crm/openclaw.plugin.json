@@ -1,0 +1,9 @@
+{
+  "id": "promoter-crm",
+  "name": "Promoter CRM",
+  "description": "Nightlife promoter CRM foundation with normalized contacts, events, invites, and interaction history.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}

@@ -1,0 +1,292 @@
+import type { DatabaseSync } from "node:sqlite";
+
+export const PROMOTER_CRM_TABLES = [
+  "contacts",
+  "contact_identities",
+  "tags",
+  "contact_tag_links",
+  "contact_notes",
+  "contact_preferences",
+  "venues",
+  "events",
+  "campaigns",
+  "event_invites",
+  "contact_score_snapshots",
+  "conversations",
+  "messages",
+  "interaction_history",
+  "segments",
+  "segment_memberships",
+] as const;
+
+export function ensurePromoterCrmSchema(db: DatabaseSync): void {
+  db.exec("PRAGMA foreign_keys = ON;");
+  db.exec("PRAGMA journal_mode = WAL;");
+  db.exec("PRAGMA busy_timeout = 1000;");
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS contacts (
+      contact_id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      first_name TEXT,
+      last_name TEXT,
+      city TEXT,
+      birthday TEXT,
+      quality_tier TEXT CHECK (quality_tier IN ('prospect', 'warm', 'regular', 'vip', 'table')),
+      manual_score_override REAL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS contact_identities (
+      identity_id TEXT PRIMARY KEY,
+      contact_id TEXT NOT NULL REFERENCES contacts(contact_id) ON DELETE CASCADE,
+      channel TEXT NOT NULL,
+      external_id TEXT,
+      handle TEXT,
+      email TEXT,
+      phone_e164 TEXT,
+      normalized_value TEXT NOT NULL,
+      source TEXT,
+      is_primary INTEGER NOT NULL DEFAULT 0,
+      confidence REAL NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(channel, normalized_value)
+    );
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_contact_identities_contact
+    ON contact_identities(contact_id);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tags (
+      tag_id TEXT PRIMARY KEY,
+      normalized_name TEXT NOT NULL UNIQUE,
+      display_name TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS contact_tag_links (
+      contact_id TEXT NOT NULL REFERENCES contacts(contact_id) ON DELETE CASCADE,
+      tag_id TEXT NOT NULL REFERENCES tags(tag_id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (contact_id, tag_id)
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS contact_notes (
+      note_id TEXT PRIMARY KEY,
+      contact_id TEXT NOT NULL REFERENCES contacts(contact_id) ON DELETE CASCADE,
+      note_type TEXT NOT NULL DEFAULT 'promoter',
+      body TEXT NOT NULL,
+      created_by TEXT,
+      created_at TEXT NOT NULL
+    );
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_contact_notes_contact_created
+    ON contact_notes(contact_id, created_at DESC);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS contact_preferences (
+      preference_id TEXT PRIMARY KEY,
+      contact_id TEXT NOT NULL REFERENCES contacts(contact_id) ON DELETE CASCADE,
+      category TEXT NOT NULL CHECK (category IN ('venue', 'music', 'borough', 'vibe')),
+      preference TEXT NOT NULL CHECK (preference IN ('prefer', 'avoid')),
+      value TEXT NOT NULL,
+      normalized_value TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(contact_id, category, preference, normalized_value)
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS venues (
+      venue_id TEXT PRIMARY KEY,
+      normalized_name TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      city TEXT NOT NULL DEFAULT '',
+      neighborhood TEXT,
+      audience_type TEXT,
+      vibe TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(normalized_name, city)
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS events (
+      event_id TEXT PRIMARY KEY,
+      venue_id TEXT REFERENCES venues(venue_id) ON DELETE SET NULL,
+      display_name TEXT NOT NULL,
+      starts_at TEXT NOT NULL,
+      ends_at TEXT,
+      theme TEXT,
+      target_crowd TEXT,
+      status TEXT NOT NULL CHECK (status IN ('planned', 'live', 'completed', 'canceled')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_events_starts_at
+    ON events(starts_at);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS campaigns (
+      campaign_id TEXT PRIMARY KEY,
+      event_id TEXT REFERENCES events(event_id) ON DELETE SET NULL,
+      display_name TEXT NOT NULL,
+      objective TEXT,
+      audience_segment TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_campaigns_event
+    ON campaigns(event_id, status);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS event_invites (
+      invite_id TEXT PRIMARY KEY,
+      contact_id TEXT NOT NULL REFERENCES contacts(contact_id) ON DELETE CASCADE,
+      event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
+      campaign_id TEXT REFERENCES campaigns(campaign_id) ON DELETE SET NULL,
+      invite_status TEXT NOT NULL CHECK (invite_status IN ('draft', 'invited', 'confirmed', 'tentative', 'declined')) DEFAULT 'draft',
+      rsvp_status TEXT NOT NULL CHECK (rsvp_status IN ('unknown', 'pending', 'yes', 'no', 'maybe')) DEFAULT 'unknown',
+      attendance_result TEXT NOT NULL CHECK (attendance_result IN ('unknown', 'attended', 'flaked', 'late')) DEFAULT 'unknown',
+      spend_amount REAL,
+      brought_guest_count INTEGER,
+      table_outcome TEXT,
+      contribution_summary TEXT,
+      note TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(contact_id, event_id)
+    );
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_event_invites_event
+    ON event_invites(event_id, invite_status, attendance_result);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS contact_score_snapshots (
+      score_id TEXT PRIMARY KEY,
+      contact_id TEXT NOT NULL REFERENCES contacts(contact_id) ON DELETE CASCADE,
+      responsiveness_score REAL,
+      attendance_likelihood_score REAL,
+      social_value_score REAL,
+      spend_potential_score REAL,
+      reliability_score REAL,
+      promoter_fit_score REAL,
+      overall_score REAL NOT NULL,
+      rationale TEXT,
+      created_at TEXT NOT NULL
+    );
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_contact_score_snapshots_contact_created
+    ON contact_score_snapshots(contact_id, created_at DESC);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS conversations (
+      conversation_id TEXT PRIMARY KEY,
+      contact_id TEXT NOT NULL REFERENCES contacts(contact_id) ON DELETE CASCADE,
+      channel TEXT NOT NULL,
+      external_thread_id TEXT,
+      status TEXT NOT NULL CHECK (status IN ('active', 'archived')) DEFAULT 'active',
+      started_at TEXT NOT NULL,
+      last_message_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(channel, external_thread_id)
+    );
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_conversations_contact_updated
+    ON conversations(contact_id, updated_at DESC);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS messages (
+      message_id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+      external_message_id TEXT,
+      direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound')),
+      status TEXT,
+      content TEXT,
+      sent_at TEXT NOT NULL,
+      metadata_json TEXT,
+      created_at TEXT NOT NULL
+    );
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_messages_conversation_sent
+    ON messages(conversation_id, sent_at DESC);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS interaction_history (
+      interaction_id TEXT PRIMARY KEY,
+      contact_id TEXT NOT NULL REFERENCES contacts(contact_id) ON DELETE CASCADE,
+      event_id TEXT REFERENCES events(event_id) ON DELETE SET NULL,
+      campaign_id TEXT REFERENCES campaigns(campaign_id) ON DELETE SET NULL,
+      conversation_id TEXT REFERENCES conversations(conversation_id) ON DELETE SET NULL,
+      message_id TEXT REFERENCES messages(message_id) ON DELETE SET NULL,
+      channel TEXT,
+      kind TEXT NOT NULL CHECK (kind IN ('outreach', 'reply', 'note', 'attendance', 'follow_up', 'summary', 'campaign')),
+      direction TEXT CHECK (direction IN ('inbound', 'outbound')),
+      sentiment TEXT,
+      summary TEXT NOT NULL,
+      outcome TEXT,
+      best_next_action TEXT,
+      intent_tags_json TEXT,
+      metadata_json TEXT,
+      occurred_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_interaction_history_contact_occurred
+    ON interaction_history(contact_id, occurred_at DESC);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS segments (
+      segment_id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      definition_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS segment_memberships (
+      segment_id TEXT NOT NULL REFERENCES segments(segment_id) ON DELETE CASCADE,
+      contact_id TEXT NOT NULL REFERENCES contacts(contact_id) ON DELETE CASCADE,
+      reason TEXT,
+      calculated_at TEXT NOT NULL,
+      PRIMARY KEY (segment_id, contact_id)
+    );
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_segment_memberships_contact
+    ON segment_memberships(contact_id, calculated_at DESC);
+  `);
+}
