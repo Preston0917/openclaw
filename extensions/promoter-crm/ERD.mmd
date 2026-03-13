@@ -1,0 +1,26 @@
+erDiagram
+  CONTACT ||--o{ CONTACT_IDENTITY : resolves_to
+  CONTACT ||--o{ CONTACT_NOTE : has
+  CONTACT ||--o{ CONTACT_PREFERENCE : expresses
+  CONTACT ||--o{ CONTACT_SCORE_SNAPSHOT : accumulates
+  CONTACT ||--o{ CONVERSATION : owns
+  CONVERSATION ||--o{ MESSAGE : contains
+  CONTACT ||--o{ INTERACTION_HISTORY : logs
+
+  CONTACT ||--o{ CONTACT_TAG_LINK : labeled_by
+  TAG ||--o{ CONTACT_TAG_LINK : applies_to
+
+  VENUE ||--o{ EVENT : hosts
+  EVENT ||--o{ CAMPAIGN : drives
+
+  CONTACT ||--o{ EVENT_INVITE : receives
+  EVENT ||--o{ EVENT_INVITE : tracks
+  CAMPAIGN o|--o{ EVENT_INVITE : sources
+
+  SEGMENT ||--o{ SEGMENT_MEMBERSHIP : contains
+  CONTACT ||--o{ SEGMENT_MEMBERSHIP : qualifies_for
+
+  EVENT o|--o{ INTERACTION_HISTORY : contextualizes
+  CAMPAIGN o|--o{ INTERACTION_HISTORY : contextualizes
+  CONVERSATION o|--o{ INTERACTION_HISTORY : summarizes
+  MESSAGE o|--o{ INTERACTION_HISTORY : references

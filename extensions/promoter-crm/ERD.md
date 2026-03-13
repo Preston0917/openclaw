@@ -10,6 +10,11 @@ principles:
 - keep activity history append-only where possible
 - let AI read from normalized facts instead of denormalized blobs
 
+Diagram assets:
+
+- source: `ERD.mmd`
+- rendered image: `ERD.svg`
+
 ## Conceptual model
 
 The CRM centers on `Contact`, because promoters reason about people first and
