@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 export const PROMOTER_CRM_TABLES = [
   "contacts",
   "contact_identities",
+  "contact_merges",
   "tags",
   "contact_tag_links",
   "contact_notes",
@@ -17,6 +18,8 @@ export const PROMOTER_CRM_TABLES = [
   "interaction_history",
   "segments",
   "segment_memberships",
+  "ingest_jobs",
+  "ingest_job_items",
 ] as const;
 
 export function ensurePromoterCrmSchema(db: DatabaseSync): void {
@@ -60,6 +63,18 @@ export function ensurePromoterCrmSchema(db: DatabaseSync): void {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_contact_identities_contact
     ON contact_identities(contact_id);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS contact_merges (
+      merge_id TEXT PRIMARY KEY,
+      from_contact_id TEXT NOT NULL REFERENCES contacts(contact_id) ON DELETE CASCADE,
+      into_contact_id TEXT NOT NULL REFERENCES contacts(contact_id) ON DELETE CASCADE,
+      reason TEXT,
+      created_by TEXT,
+      created_at TEXT NOT NULL,
+      CHECK (from_contact_id <> into_contact_id)
+    );
   `);
 
   db.exec(`
@@ -313,5 +328,41 @@ export function ensurePromoterCrmSchema(db: DatabaseSync): void {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_segment_memberships_contact
     ON segment_memberships(contact_id, calculated_at DESC);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ingest_jobs (
+      ingest_job_id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      source_label TEXT,
+      file_name TEXT,
+      status TEXT NOT NULL,
+      stats_json TEXT,
+      initiated_by TEXT,
+      started_at TEXT NOT NULL,
+      finished_at TEXT
+    );
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_ingest_jobs_source_started
+    ON ingest_jobs(source, started_at DESC);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ingest_job_items (
+      ingest_job_item_id TEXT PRIMARY KEY,
+      ingest_job_id TEXT NOT NULL REFERENCES ingest_jobs(ingest_job_id) ON DELETE CASCADE,
+      row_number INTEGER,
+      external_id TEXT,
+      action TEXT NOT NULL CHECK (action IN ('created', 'updated', 'merged', 'skipped', 'failed')),
+      resolved_contact_id TEXT REFERENCES contacts(contact_id) ON DELETE SET NULL,
+      raw_payload_json TEXT NOT NULL,
+      error_text TEXT,
+      created_at TEXT NOT NULL
+    );
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_ingest_job_items_job_action
+    ON ingest_job_items(ingest_job_id, action, row_number);
   `);
 }

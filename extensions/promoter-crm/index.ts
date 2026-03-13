@@ -80,6 +80,22 @@ function registerCli(api: OpenClawPluginApi): void {
           const status = await withPromoterCrmStore({ stateDir }, (store) => store.getStatus());
           console.log(JSON.stringify(status, null, 2));
         });
+
+      crm
+        .command("import-csv")
+        .description("Import contacts from a CSV file and record ingest audit rows")
+        .argument("<csvPath>", "Path to the CSV file")
+        .option("--initiated-by <id>", "Operator or process identifier for audit logging")
+        .action(async (csvPath: string, options: { initiatedBy?: string }) => {
+          const stateDir = api.runtime.state.resolveStateDir(process.env);
+          const result = await withPromoterCrmStore({ stateDir }, (store) =>
+            store.importContactsFromCsvFile({
+              csvPath,
+              initiatedBy: options.initiatedBy,
+            }),
+          );
+          console.log(JSON.stringify(result, null, 2));
+        });
     },
     { commands: ["promoter-crm"] },
   );

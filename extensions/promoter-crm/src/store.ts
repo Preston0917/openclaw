@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { mapCsvRowToContactInput, parseCsvRows } from "./csv-import.js";
 import { ensurePromoterCrmSchema, PROMOTER_CRM_TABLES } from "./schema.js";
 import { requireNodeSqlite } from "./sqlite.js";
 
@@ -25,6 +26,15 @@ export type CampaignStatus = "draft" | "active" | "paused" | "completed" | "arch
 export type InviteStatus = "draft" | "invited" | "confirmed" | "tentative" | "declined";
 export type RsvpStatus = "unknown" | "pending" | "yes" | "no" | "maybe";
 export type AttendanceResult = "unknown" | "attended" | "flaked" | "late";
+export type IngestSource =
+  | "manual"
+  | "google_contacts"
+  | "manychat"
+  | "csv"
+  | "instagram"
+  | "imessage"
+  | "whatsapp"
+  | "other";
 export type InteractionKind =
   | "outreach"
   | "reply"
@@ -173,6 +183,13 @@ export type GetVenueAttendanceInput = {
   limit?: number;
 };
 
+export type ImportCsvInput = {
+  csvText: string;
+  fileName?: string;
+  sourceLabel?: string;
+  initiatedBy?: string;
+};
+
 type StoreOptions = {
   stateDir: string;
 };
@@ -229,6 +246,8 @@ type SearchContactsInput = {
   segmentId?: string;
   limit?: number;
 };
+
+type IngestItemAction = "created" | "updated" | "merged" | "skipped" | "failed";
 
 function normalizeWhitespace(value: string | undefined): string {
   return value?.trim() ?? "";
@@ -521,6 +540,92 @@ export class PromoterCrmStore {
     };
   }
 
+  private createIngestJob(params: {
+    source: IngestSource;
+    sourceLabel?: string;
+    fileName?: string;
+    initiatedBy?: string;
+  }): { ingestJobId: string; startedAt: string } {
+    const ingestJobId = randomUUID();
+    const startedAt = nowIso();
+    this.db
+      .prepare(`
+        INSERT INTO ingest_jobs (
+          ingest_job_id,
+          source,
+          source_label,
+          file_name,
+          status,
+          stats_json,
+          initiated_by,
+          started_at,
+          finished_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        ingestJobId,
+        params.source,
+        maybeString(params.sourceLabel),
+        maybeString(params.fileName),
+        "running",
+        JSON.stringify({}),
+        maybeString(params.initiatedBy),
+        startedAt,
+        null,
+      );
+    return { ingestJobId, startedAt };
+  }
+
+  private appendIngestJobItem(params: {
+    ingestJobId: string;
+    rowNumber?: number;
+    externalId?: string;
+    action: IngestItemAction;
+    resolvedContactId?: string;
+    rawPayload: Record<string, string>;
+    errorText?: string;
+  }): void {
+    this.db
+      .prepare(`
+        INSERT INTO ingest_job_items (
+          ingest_job_item_id,
+          ingest_job_id,
+          row_number,
+          external_id,
+          action,
+          resolved_contact_id,
+          raw_payload_json,
+          error_text,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        randomUUID(),
+        params.ingestJobId,
+        typeof params.rowNumber === "number" ? params.rowNumber : null,
+        maybeString(params.externalId),
+        params.action,
+        maybeString(params.resolvedContactId),
+        JSON.stringify(params.rawPayload),
+        maybeString(params.errorText),
+        nowIso(),
+      );
+  }
+
+  private finishIngestJob(params: {
+    ingestJobId: string;
+    status: "completed" | "failed";
+    stats: Record<string, unknown>;
+  }): void {
+    this.db
+      .prepare(`
+        UPDATE ingest_jobs
+        SET status = ?, stats_json = ?, finished_at = ?
+        WHERE ingest_job_id = ?
+      `)
+      .run(params.status, JSON.stringify(params.stats), nowIso(), params.ingestJobId);
+  }
+
   private withTransaction<T>(fn: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -732,6 +837,7 @@ export class PromoterCrmStore {
     contactId: string;
     displayName: string;
     latestScore: LatestScoreRow | null;
+    action: "created" | "updated";
   } {
     return this.withTransaction(() => {
       const now = nowIso();
@@ -828,6 +934,7 @@ export class PromoterCrmStore {
         contactId,
         displayName,
         latestScore: this.getLatestScore(contactId),
+        action: existing ? "updated" : "created",
       };
     });
   }
@@ -1591,6 +1698,134 @@ export class PromoterCrmStore {
         membershipCount: members.length,
         members,
       };
+    });
+  }
+
+  importContactsFromCsv(input: ImportCsvInput): {
+    ingestJobId: string;
+    source: IngestSource;
+    fileName: string | null;
+    stats: Record<string, number>;
+    items: Array<Record<string, unknown>>;
+  } {
+    const ingestJob = this.createIngestJob({
+      source: "csv",
+      sourceLabel: input.sourceLabel,
+      fileName: input.fileName,
+      initiatedBy: input.initiatedBy,
+    });
+    const rows = parseCsvRows(input.csvText);
+    const stats = {
+      totalRows: rows.length,
+      created: 0,
+      updated: 0,
+      skipped: 0,
+      failed: 0,
+    };
+    const items: Array<Record<string, unknown>> = [];
+
+    try {
+      for (const row of rows) {
+        const mapped = mapCsvRowToContactInput(row.values);
+        if (!mapped.input) {
+          stats.skipped += 1;
+          const item = {
+            rowNumber: row.rowNumber,
+            action: "skipped",
+            externalId: mapped.externalId ?? null,
+            error: mapped.skipReason ?? "Row did not contain importable contact data.",
+          } satisfies Record<string, unknown>;
+          items.push(item);
+          this.appendIngestJobItem({
+            ingestJobId: ingestJob.ingestJobId,
+            rowNumber: row.rowNumber,
+            externalId: mapped.externalId,
+            action: "skipped",
+            rawPayload: row.values,
+            errorText: mapped.skipReason,
+          });
+          continue;
+        }
+
+        try {
+          const result = this.upsertContact({
+            ...mapped.input,
+            createdBy: input.initiatedBy,
+          });
+          stats[result.action] += 1;
+          const item = {
+            rowNumber: row.rowNumber,
+            action: result.action,
+            contactId: result.contactId,
+            displayName: result.displayName,
+            externalId: mapped.externalId ?? null,
+          } satisfies Record<string, unknown>;
+          items.push(item);
+          this.appendIngestJobItem({
+            ingestJobId: ingestJob.ingestJobId,
+            rowNumber: row.rowNumber,
+            externalId: mapped.externalId,
+            action: result.action,
+            resolvedContactId: result.contactId,
+            rawPayload: row.values,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          stats.failed += 1;
+          const item = {
+            rowNumber: row.rowNumber,
+            action: "failed",
+            externalId: mapped.externalId ?? null,
+            error: message,
+          } satisfies Record<string, unknown>;
+          items.push(item);
+          this.appendIngestJobItem({
+            ingestJobId: ingestJob.ingestJobId,
+            rowNumber: row.rowNumber,
+            externalId: mapped.externalId,
+            action: "failed",
+            rawPayload: row.values,
+            errorText: message,
+          });
+        }
+      }
+
+      this.finishIngestJob({
+        ingestJobId: ingestJob.ingestJobId,
+        status: "completed",
+        stats,
+      });
+
+      return {
+        ingestJobId: ingestJob.ingestJobId,
+        source: "csv",
+        fileName: maybeString(input.fileName),
+        stats,
+        items,
+      };
+    } catch (err) {
+      this.finishIngestJob({
+        ingestJobId: ingestJob.ingestJobId,
+        status: "failed",
+        stats,
+      });
+      throw err;
+    }
+  }
+
+  importContactsFromCsvFile(params: { csvPath: string; initiatedBy?: string }): {
+    ingestJobId: string;
+    source: IngestSource;
+    fileName: string | null;
+    stats: Record<string, number>;
+    items: Array<Record<string, unknown>>;
+  } {
+    const csvText = fs.readFileSync(params.csvPath, "utf8");
+    return this.importContactsFromCsv({
+      csvText,
+      fileName: path.basename(params.csvPath),
+      sourceLabel: params.csvPath,
+      initiatedBy: params.initiatedBy,
     });
   }
 

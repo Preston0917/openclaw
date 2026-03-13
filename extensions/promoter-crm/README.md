@@ -76,6 +76,7 @@ maps onto the current SQLite schema.
 ```bash
 openclaw promoter-crm init
 openclaw promoter-crm status
+openclaw promoter-crm import-csv ./contacts.csv
 ```
 
 ## What it covers today
@@ -89,11 +90,14 @@ openclaw promoter-crm status
 - Saved audience segments with materialized memberships
 - Unified interaction, conversation, and message history
 - Venue attendance lookup across events through the normalized invite path
+- CSV contact import with ingest job auditing
+- Operational ingest tables for future Google Contacts and ManyChat syncs
 
 ## Foundation docs
 
 - `ERD.md`: conceptual model, cardinalities, and product-spec mapping
 - `src/schema.ts`: physical SQLite schema that implements the ERD
+- `promoter-crm import-csv`: imports contact rows using common columns like `display_name`, `phone`, `email`, `instagram_handle`, `manychat_id`, `tags`, and `preferred_music`
 
 ## Database location
 

@@ -30,6 +30,7 @@ describe("promoter CRM store", () => {
     expect(status.tableCounts.contacts).toBe(0);
     expect(status.tableCounts.events).toBe(0);
     expect(status.tableCounts.interaction_history).toBe(0);
+    expect(status.tableCounts.ingest_jobs).toBe(0);
   });
 
   it("resolves repeated identities back to the same contact", async () => {
@@ -234,5 +235,55 @@ describe("promoter CRM store", () => {
     expect(matches[0]?.display_name).toBe("Sky James");
     expect(segments[0]?.display_name).toBe("NY VIP 80+");
     expect(segments[0]?.reason).toContain("tagsAny=vip");
+  });
+
+  it("imports CSV contacts and records ingest audit rows", async () => {
+    const stateDir = await makeStateDir();
+    const result = withPromoterCrmStore({ stateDir }, (store) => {
+      const imported = store.importContactsFromCsv({
+        fileName: "contacts.csv",
+        initiatedBy: "codex-test",
+        csvText: [
+          "display_name,instagram_handle,phone,city,tags,note,preferred_music,manychat_id",
+          "Ava Stone,@ava.stone,,,,,,",
+          'Ava Stone,@ava.stone,+1 (212) 555-0199,New York,"vip,birthday","Met at opener",house,',
+          ",,,,vip,Missing identity and name,,",
+          "Miles Rivera,,,,prospect,,,mc-42",
+        ].join("\n"),
+      });
+
+      const avaMatch = store.findContacts({ query: "ava stone", limit: 5 })[0] as
+        | { contact_id?: string }
+        | undefined;
+      const ava = avaMatch?.contact_id ? store.getContact(avaMatch.contact_id) : null;
+      const status = store.getStatus();
+
+      return {
+        imported,
+        ava,
+        status,
+      };
+    });
+
+    expect(result.imported.stats.created).toBe(2);
+    expect(result.imported.stats.updated).toBe(1);
+    expect(result.imported.stats.skipped).toBe(1);
+    expect(result.imported.stats.failed).toBe(0);
+    expect(result.imported.items).toHaveLength(4);
+    expect(result.status.tableCounts.ingest_jobs).toBe(1);
+    expect(result.status.tableCounts.ingest_job_items).toBe(4);
+
+    const contact = result.ava?.contact as { city: string | null; displayName: string };
+    const identities = result.ava?.identities as Array<{ channel: string }>;
+    const tags = result.ava?.tags as string[];
+    const preferences = result.ava?.preferences as Array<{ category: string; value: string }>;
+    const notes = result.ava?.notes as Array<{ body: string }>;
+
+    expect(contact.displayName).toBe("Ava Stone");
+    expect(contact.city).toBe("New York");
+    expect(identities.map((entry) => entry.channel).sort()).toEqual(["instagram", "phone"]);
+    expect(tags).toEqual(["birthday", "vip"]);
+    expect(preferences[0]).toMatchObject({ category: "music", value: "house" });
+    expect(notes[0]?.body).toBe("Met at opener");
   });
 });
