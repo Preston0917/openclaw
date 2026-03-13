@@ -14,6 +14,8 @@ Diagram assets:
 
 - source: `ERD.mmd`
 - rendered image: `ERD.svg`
+- readable source: `ERD-readable.mmd`
+- readable renders: `ERD-readable.svg`, `ERD-readable.png`, `ERD-readable.pdf`
 
 ## Conceptual model
 
@@ -110,6 +112,10 @@ That gives us clean support for:
 - spend and table outcome
 - guest contribution notes
 - campaign attribution
+
+Venue attendance is intentionally derived through `EventInvite` plus `Event`
+instead of duplicating venue links on the contact record. That means you can ask
+"who went to what venue?" while still keeping the canonical model normalized.
 
 ### Communication entities
 

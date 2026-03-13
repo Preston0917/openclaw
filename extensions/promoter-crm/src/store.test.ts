@@ -122,6 +122,7 @@ describe("promoter CRM store", () => {
         campaignId: campaign.campaignId,
         inviteStatus: "confirmed",
         rsvpStatus: "yes",
+        attendanceResult: "attended",
         contributionSummary: "Strong table candidate",
       });
       const score = store.recordScore({
@@ -149,6 +150,10 @@ describe("promoter CRM store", () => {
         invite,
         score,
         contact: store.getContact(contact.contactId),
+        venueAttendance: store.getVenueAttendance({
+          venueId: event.venueId,
+          attendanceResult: "attended",
+        }),
       };
     });
 
@@ -167,6 +172,10 @@ describe("promoter CRM store", () => {
     expect(invites[0]?.campaign_name).toBe("Friday VIP table push");
     expect(interactions[0]?.summary).toBe("Sent personalized table invite.");
     expect(messages[0]?.channel).toBe("whatsapp");
+    expect(result.venueAttendance.attendees).toHaveLength(1);
+    expect((result.venueAttendance.attendees[0] as { contact_name: string }).contact_name).toBe(
+      "Miles Rivera",
+    );
   });
 
   it("materializes saved audience segments from normalized contact facts", async () => {

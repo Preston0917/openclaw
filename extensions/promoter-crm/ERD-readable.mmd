@@ -1,0 +1,86 @@
+%%{init: {
+  "theme": "base",
+  "themeVariables": {
+    "fontFamily": "Avenir Next, Helvetica, Arial, sans-serif",
+    "fontSize": "22px",
+    "primaryColor": "#F7F3EA",
+    "primaryTextColor": "#1D1D1D",
+    "primaryBorderColor": "#5B554B",
+    "lineColor": "#6B6459",
+    "clusterBkg": "#FCFAF5",
+    "clusterBorder": "#B8AE9D",
+    "tertiaryColor": "#FFFDF7"
+  },
+  "flowchart": {
+    "htmlLabels": true,
+    "curve": "basis",
+    "nodeSpacing": 45,
+    "rankSpacing": 65,
+    "padding": 20
+  }
+}}%%
+flowchart TB
+  classDef hub fill:#ECE4D6,stroke:#3E3932,stroke-width:2.5px,color:#141414;
+  classDef entity fill:#F7F3EA,stroke:#5B554B,stroke-width:1.6px,color:#1D1D1D;
+  classDef assoc fill:#FFFDF7,stroke:#7C735F,stroke-width:2px,stroke-dasharray: 6 3,color:#1D1D1D;
+
+  subgraph Identity["Identity & Canonical Contact"]
+    direction LR
+    C["CONTACT<br/>canonical promoter-facing person record"]
+    CI["CONTACT_IDENTITY<br/>IG / phone / email / ManyChat / source IDs"]
+  end
+
+  subgraph Memory["Relationship Memory"]
+    direction LR
+    CN["CONTACT_NOTE<br/>promoter notes"]
+    CP["CONTACT_PREFERENCE<br/>venue / music / borough / vibe"]
+    CSS["CONTACT_SCORE_SNAPSHOT<br/>historical scoring facts"]
+    CTL["CONTACT_TAG_LINK<br/>contact ↔ tag"]
+    T["TAG"]
+    SM["SEGMENT_MEMBERSHIP<br/>segment ↔ contact"]
+    S["SEGMENT"]
+  end
+
+  subgraph Messaging["Communication Timeline"]
+    direction LR
+    CONV["CONVERSATION<br/>channel thread for one contact"]
+    MSG["MESSAGE<br/>inbound / outbound message fact"]
+    IH["INTERACTION_HISTORY<br/>summary / outcome / next action"]
+  end
+
+  subgraph Ops["Event Operations"]
+    direction LR
+    V["VENUE"]
+    E["EVENT"]
+    CAM["CAMPAIGN<br/>outreach plan"]
+    INV["EVENT_INVITE<br/>invite / RSVP / attendance state"]
+  end
+
+  class C hub
+  class CI,CN,CP,CSS,T,S,CONV,MSG,IH,V,E,CAM entity
+  class CTL,SM,INV assoc
+
+  C -->|"1 contact → many identities"| CI
+
+  C -->|"1 contact → many notes"| CN
+  C -->|"1 contact → many preferences"| CP
+  C -->|"1 contact → many score snapshots"| CSS
+  C -->|"labeled through"| CTL
+  T -->|"applies through"| CTL
+  C -->|"qualifies through"| SM
+  S -->|"contains contacts through"| SM
+
+  C -->|"1 contact → many conversations"| CONV
+  CONV -->|"contains many messages"| MSG
+  C -->|"1 contact → many interaction records"| IH
+  CONV -.->|"may summarize"| IH
+  MSG -.->|"may reference"| IH
+
+  V -->|"hosts many"| E
+  E -->|"drives many"| CAM
+  C -->|"receives one per event through"| INV
+  E -->|"tracks guest state through"| INV
+  CAM -.->|"optional source"| INV
+  V -.->|"attendee history derives through Event + Invite"| C
+  E -.->|"may contextualize"| IH
+  CAM -.->|"may contextualize"| IH

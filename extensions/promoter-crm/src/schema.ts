@@ -182,6 +182,31 @@ export function ensurePromoterCrmSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_event_invites_event
     ON event_invites(event_id, invite_status, attendance_result);
   `);
+  db.exec(`
+    CREATE VIEW IF NOT EXISTS venue_attendance_history AS
+    SELECT
+      v.venue_id,
+      v.display_name AS venue_name,
+      v.city AS venue_city,
+      e.event_id,
+      e.display_name AS event_name,
+      e.starts_at,
+      ei.invite_id,
+      ei.contact_id,
+      c.display_name AS contact_name,
+      ei.invite_status,
+      ei.rsvp_status,
+      ei.attendance_result,
+      ei.spend_amount,
+      ei.brought_guest_count,
+      ei.table_outcome,
+      ei.contribution_summary,
+      ei.note
+    FROM event_invites ei
+    JOIN contacts c ON c.contact_id = ei.contact_id
+    JOIN events e ON e.event_id = ei.event_id
+    JOIN venues v ON v.venue_id = e.venue_id;
+  `);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS contact_score_snapshots (

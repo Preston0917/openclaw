@@ -61,7 +61,8 @@ maps onto the current SQLite schema.
             "promoter_crm_upsert_segment",
             "promoter_crm_refresh_segment",
             "promoter_crm_log_interaction",
-            "promoter_crm_get_contact"
+            "promoter_crm_get_contact",
+            "promoter_crm_get_venue_attendance"
           ]
         }
       }
@@ -87,6 +88,7 @@ openclaw promoter-crm status
 - Score snapshots for prioritization workflows
 - Saved audience segments with materialized memberships
 - Unified interaction, conversation, and message history
+- Venue attendance lookup across events through the normalized invite path
 
 ## Foundation docs
 

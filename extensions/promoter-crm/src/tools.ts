@@ -326,6 +326,17 @@ const GetContactSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const GetVenueAttendanceSchema = Type.Object(
+  {
+    venueId: Type.String({ description: "Venue id to inspect." }),
+    attendanceResult: Type.Optional(
+      stringEnum(ATTENDANCE_RESULTS, "Optional attendance filter, such as attended or flaked."),
+    ),
+    limit: Type.Optional(Type.Number({ minimum: 1, maximum: 500 })),
+  },
+  { additionalProperties: false },
+);
+
 function executeWithStore<T>(api: OpenClawPluginApi, fn: (store: PromoterCrmStore) => T): T {
   const stateDir = api.runtime.state.resolveStateDir(process.env);
   return withPromoterCrmStore({ stateDir }, fn);
@@ -341,6 +352,7 @@ type UpsertSegmentParams = Static<typeof UpsertSegmentSchema>;
 type RefreshSegmentParams = Static<typeof RefreshSegmentSchema>;
 type LogInteractionParams = Static<typeof LogInteractionSchema>;
 type GetContactParams = Static<typeof GetContactSchema>;
+type GetVenueAttendanceParams = Static<typeof GetVenueAttendanceSchema>;
 
 export function createPromoterCrmStatusTool(api: OpenClawPluginApi): AnyAgentTool {
   return {
@@ -590,6 +602,30 @@ export function createPromoterCrmGetContactTool(api: OpenClawPluginApi): AnyAgen
           {
             type: "text",
             text: `Loaded promoter CRM contact ${(result.contact as { displayName?: string }).displayName ?? (params as GetContactParams).contactId}.`,
+          },
+        ],
+        details: result,
+      };
+    },
+  };
+}
+
+export function createPromoterCrmGetVenueAttendanceTool(api: OpenClawPluginApi): AnyAgentTool {
+  return {
+    name: "promoter_crm_get_venue_attendance",
+    label: "Promoter CRM Get Venue Attendance",
+    description:
+      "Show who attended, flaked, or was invited at a venue across its events using the normalized attendance path.",
+    parameters: GetVenueAttendanceSchema,
+    execute: async (_toolCallId, params) => {
+      const result = executeWithStore(api, (store) =>
+        store.getVenueAttendance(params as GetVenueAttendanceParams),
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Loaded ${result.attendees.length} venue attendance record(s) for ${String((result.venue as { display_name?: string }).display_name ?? (params as GetVenueAttendanceParams).venueId)}.`,
           },
         ],
         details: result,

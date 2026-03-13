@@ -167,6 +167,12 @@ export type RefreshSegmentInput = {
   segmentId: string;
 };
 
+export type GetVenueAttendanceInput = {
+  venueId: string;
+  attendanceResult?: AttendanceResult;
+  limit?: number;
+};
+
 type StoreOptions = {
   stateDir: string;
 };
@@ -213,7 +219,6 @@ type SegmentCandidateRow = {
   quality_tier: ContactQualityTier | null;
   latest_score: number | null;
   last_interaction_at: string | null;
-  updated_at: string;
 };
 
 type SearchContactsInput = {
@@ -1432,7 +1437,6 @@ export class PromoterCrmStore {
             c.city,
             c.birthday,
             c.quality_tier,
-            c.updated_at,
             (
               SELECT overall_score
               FROM contact_score_snapshots css
@@ -1588,6 +1592,65 @@ export class PromoterCrmStore {
         members,
       };
     });
+  }
+
+  getVenueAttendance(input: GetVenueAttendanceInput): {
+    venue: Record<string, unknown>;
+    attendees: Array<Record<string, unknown>>;
+  } {
+    const venue = this.db
+      .prepare(`
+        SELECT venue_id, display_name, city, neighborhood, audience_type, vibe
+        FROM venues
+        WHERE venue_id = ?
+      `)
+      .get(input.venueId) as Record<string, unknown> | undefined;
+    if (!venue) {
+      throw new Error(`Venue not found: ${input.venueId}`);
+    }
+
+    const filters: string[] = ["venue_id = ?"];
+    const params: Array<string | number> = [input.venueId];
+    if (input.attendanceResult) {
+      filters.push("attendance_result = ?");
+      params.push(input.attendanceResult);
+    }
+    const limit = Math.max(1, Math.min(input.limit ?? 100, 500));
+    params.push(limit);
+
+    const attendees = this.db
+      .prepare(`
+        SELECT
+          contact_id,
+          contact_name,
+          event_id,
+          event_name,
+          starts_at,
+          invite_id,
+          invite_status,
+          rsvp_status,
+          attendance_result,
+          spend_amount,
+          brought_guest_count,
+          table_outcome,
+          contribution_summary,
+          note
+        FROM venue_attendance_history
+        WHERE ${filters.join(" AND ")}
+        ORDER BY
+          starts_at DESC,
+          CASE attendance_result
+            WHEN 'attended' THEN 0
+            WHEN 'late' THEN 1
+            WHEN 'flaked' THEN 2
+            ELSE 3
+          END,
+          contact_name ASC
+        LIMIT ?
+      `)
+      .all(...params) as Array<Record<string, unknown>>;
+
+    return { venue, attendees };
   }
 
   private listContactIdentities(contactId: string): Array<Record<string, unknown>> {

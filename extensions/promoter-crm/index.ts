@@ -9,6 +9,7 @@ import { resolvePromoterCrmPaths, withPromoterCrmStore } from "./src/store.js";
 import {
   createPromoterCrmFindContactsTool,
   createPromoterCrmGetContactTool,
+  createPromoterCrmGetVenueAttendanceTool,
   createPromoterCrmLogInteractionTool,
   createPromoterCrmRecordScoreTool,
   createPromoterCrmRefreshSegmentTool,
@@ -33,6 +34,7 @@ function registerTools(api: OpenClawPluginApi): void {
     createPromoterCrmRefreshSegmentTool(api),
     createPromoterCrmLogInteractionTool(api),
     createPromoterCrmGetContactTool(api),
+    createPromoterCrmGetVenueAttendanceTool(api),
   ];
 
   for (const tool of tools) {
