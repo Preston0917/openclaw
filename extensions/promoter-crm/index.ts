@@ -4,6 +4,7 @@ import type {
   OpenClawPluginService,
 } from "openclaw/plugin-sdk/core";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/core";
+import { createManychatWebhookHandler } from "./src/manychat-webhook.js";
 import { PROMOTER_CRM_AGENT_GUIDANCE } from "./src/prompt-guidance.js";
 import { resolvePromoterCrmPaths, withPromoterCrmStore } from "./src/store.js";
 import {
@@ -118,6 +119,22 @@ function registerCli(api: OpenClawPluginApi): void {
           );
           console.log(JSON.stringify(result, null, 2));
         });
+
+      crm
+        .command("import-manychat")
+        .description("Import ManyChat full-contact JSON from a local file")
+        .argument("<jsonPath>", "Path to the ManyChat JSON payload file")
+        .option("--initiated-by <id>", "Operator or process identifier for audit logging")
+        .action(async (jsonPath: string, options: { initiatedBy?: string }) => {
+          const stateDir = api.runtime.state.resolveStateDir(process.env);
+          const result = await withPromoterCrmStore({ stateDir }, (store) =>
+            store.importManychatPayloadFile({
+              jsonPath,
+              initiatedBy: options.initiatedBy,
+            }),
+          );
+          console.log(JSON.stringify(result, null, 2));
+        });
     },
     { commands: ["promoter-crm"] },
   );
@@ -133,6 +150,11 @@ const plugin = {
     registerTools(api);
     api.registerService(createPromoterCrmService(api));
     registerCli(api);
+    api.registerHttpRoute({
+      path: "/promoter-crm/webhooks/manychat",
+      auth: "plugin",
+      handler: createManychatWebhookHandler(api),
+    });
     api.on("before_prompt_build", async () => ({
       prependSystemContext: PROMOTER_CRM_AGENT_GUIDANCE,
     }));

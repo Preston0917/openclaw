@@ -78,6 +78,7 @@ maps onto the current SQLite schema.
 openclaw promoter-crm init
 openclaw promoter-crm status
 openclaw promoter-crm import-csv ./contacts.csv
+openclaw promoter-crm import-manychat ./manychat-contact.json
 openclaw promoter-crm followup-queue --limit 25
 ```
 
@@ -93,7 +94,8 @@ openclaw promoter-crm followup-queue --limit 25
 - Unified interaction, conversation, and message history
 - Venue attendance lookup across events through the normalized invite path
 - CSV contact import with ingest job auditing
-- Operational ingest tables for future Google Contacts and ManyChat syncs
+- ManyChat JSON and webhook ingestion into normalized contacts, conversations, messages, and interaction history
+- Operational ingest tables for future Google Contacts syncs
 - Persisted follow-up queue ranking driven by score, invite state, and stale conversations
 
 ## Foundation docs
@@ -101,6 +103,45 @@ openclaw promoter-crm followup-queue --limit 25
 - `ERD.md`: conceptual model, cardinalities, and product-spec mapping
 - `src/schema.ts`: physical SQLite schema that implements the ERD
 - `promoter-crm import-csv`: imports contact rows using common columns like `display_name`, `phone`, `email`, `instagram_handle`, `manychat_id`, `tags`, and `preferred_music`
+- `promoter-crm import-manychat`: ingests ManyChat "Full Contact Data" JSON plus optional message arrays into the normalized CRM graph
+
+## ManyChat connector
+
+ManyChat is modeled as a CRM/source connector, not as a native OpenClaw chat
+transport. The importer expects the official ManyChat "Full Contact Data" JSON
+shape, with optional `messages` or `message` payloads if you want to hydrate
+conversation history alongside the contact record.
+
+For local testing, import a saved JSON payload:
+
+```bash
+openclaw promoter-crm import-manychat ./manychat-contact.json
+```
+
+For live ingestion from ManyChat External Request, point ManyChat at:
+
+`POST /promoter-crm/webhooks/manychat`
+
+The webhook is public (`auth: "plugin"`) but requires a shared secret in one
+of these headers:
+
+- `x-promoter-crm-webhook-secret`
+- `x-manychat-secret`
+- `Authorization: Bearer <secret>`
+
+Configure the expected secret in the OpenClaw gateway environment:
+
+```bash
+export PROMOTER_CRM_MANYCHAT_WEBHOOK_SECRET="replace-me"
+```
+
+Recommended pattern:
+
+- Use ManyChat "Full Contact Data" export payloads to create or refresh contacts.
+- Add `messages` or `message` objects in your External Request body when you
+  want to import live conversation events.
+- Replays are idempotent for the same message ids or the same synthesized
+  ManyChat message fingerprint, so webhook retries do not multiply the thread.
 
 ## Database location
 

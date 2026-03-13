@@ -1,8 +1,9 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { mapCsvRowToContactInput, parseCsvRows } from "./csv-import.js";
+import { parseManychatPayload } from "./manychat-import.js";
 import { ensurePromoterCrmSchema, PROMOTER_CRM_TABLES } from "./schema.js";
 import { requireNodeSqlite } from "./sqlite.js";
 
@@ -191,6 +192,13 @@ export type ImportCsvInput = {
   initiatedBy?: string;
 };
 
+export type ImportManychatInput = {
+  payload: unknown;
+  fileName?: string;
+  sourceLabel?: string;
+  initiatedBy?: string;
+};
+
 export type RankFollowupsInput = {
   limit?: number;
   minDaysSinceLastInteraction?: number;
@@ -302,6 +310,16 @@ function normalizeIdentityValue(identity: ContactIdentityInput): string {
     normalizePhone(identity.phoneE164) ||
     normalizeHandle(identity.handle)
   );
+}
+
+function buildStableImportId(prefix: string, parts: Array<string | null | undefined>): string {
+  const hash = createHash("sha256");
+  hash.update(prefix);
+  for (const part of parts) {
+    hash.update("\u001f");
+    hash.update(part ?? "");
+  }
+  return `${prefix}-${hash.digest("hex").slice(0, 24)}`;
 }
 
 function nowIso(): string {
@@ -598,7 +616,7 @@ export class PromoterCrmStore {
     externalId?: string;
     action: IngestItemAction;
     resolvedContactId?: string;
-    rawPayload: Record<string, string>;
+    rawPayload: Record<string, unknown>;
     errorText?: string;
   }): void {
     this.db
@@ -886,6 +904,76 @@ export class PromoterCrmStore {
         now,
       );
     }
+  }
+
+  private getExistingPreferenceInputs(contactId: string): ContactPreferenceInput[] {
+    const rows = this.db
+      .prepare(`
+        SELECT category, preference, value
+        FROM contact_preferences
+        WHERE contact_id = ?
+      `)
+      .all(contactId) as Array<{
+      category: ContactPreferenceInput["category"];
+      preference: ContactPreferenceInput["preference"];
+      value: string;
+    }>;
+    return rows.map((row) => ({
+      category: row.category,
+      preference: row.preference,
+      value: row.value,
+    }));
+  }
+
+  private hasContactNoteBody(contactId: string, note: string): boolean {
+    const normalizedNote = normalizeWhitespace(note);
+    if (!normalizedNote) {
+      return false;
+    }
+    const row = this.db
+      .prepare(`
+        SELECT note_id
+        FROM contact_notes
+        WHERE contact_id = ? AND TRIM(body) = ?
+        LIMIT 1
+      `)
+      .get(contactId, normalizedNote) as { note_id?: string } | undefined;
+    return Boolean(row?.note_id);
+  }
+
+  private prepareImportedContactInput(input: UpsertContactInput): UpsertContactInput {
+    const existingContactId = this.resolveExistingContactId(input);
+    if (!existingContactId) {
+      return input;
+    }
+
+    const nextInput: UpsertContactInput = { ...input };
+
+    if (input.tags && input.tags.length > 0) {
+      const mergedTags = [
+        ...new Set([...this.listContactTags(existingContactId), ...input.tags].map(normalizeTag)),
+      ].filter(Boolean);
+      nextInput.tags = mergedTags.length > 0 ? mergedTags : undefined;
+    }
+
+    if (input.preferences && input.preferences.length > 0) {
+      const merged = new Map<string, ContactPreferenceInput>();
+      for (const preference of this.getExistingPreferenceInputs(existingContactId)) {
+        const key = `${preference.category}:${preference.preference}:${normalizeTag(preference.value)}`;
+        merged.set(key, preference);
+      }
+      for (const preference of input.preferences) {
+        const key = `${preference.category}:${preference.preference}:${normalizeTag(preference.value)}`;
+        merged.set(key, preference);
+      }
+      nextInput.preferences = [...merged.values()];
+    }
+
+    if (input.note && this.hasContactNoteBody(existingContactId, input.note)) {
+      nextInput.note = undefined;
+    }
+
+    return nextInput;
   }
 
   upsertContact(input: UpsertContactInput): {
@@ -1432,13 +1520,23 @@ export class PromoterCrmStore {
     content?: string;
     occurredAt: string;
     metadata?: Record<string, unknown>;
-  }): string | null {
-    const hasMessage = maybeString(params.externalMessageId) || maybeString(params.content);
+  }): { messageId: string; action: "created" | "updated" } | null {
+    const externalMessageId = maybeString(params.externalMessageId);
+    const hasMessage = externalMessageId || maybeString(params.content);
     if (!hasMessage) {
       return null;
     }
     const now = nowIso();
-    const messageId = randomUUID();
+    const existing = externalMessageId
+      ? (this.db
+          .prepare(`
+            SELECT message_id
+            FROM messages
+            WHERE conversation_id = ? AND external_message_id = ?
+          `)
+          .get(params.conversationId, externalMessageId) as { message_id?: string } | undefined)
+      : undefined;
+    const messageId = existing?.message_id ?? randomUUID();
     this.db
       .prepare(`
         INSERT INTO messages (
@@ -1452,11 +1550,17 @@ export class PromoterCrmStore {
           metadata_json,
           created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(conversation_id, external_message_id) DO UPDATE SET
+          direction = excluded.direction,
+          status = excluded.status,
+          content = excluded.content,
+          sent_at = excluded.sent_at,
+          metadata_json = excluded.metadata_json
       `)
       .run(
         messageId,
         params.conversationId,
-        maybeString(params.externalMessageId),
+        externalMessageId,
         params.direction ?? "outbound",
         maybeString(params.status),
         maybeString(params.content),
@@ -1464,7 +1568,10 @@ export class PromoterCrmStore {
         params.metadata ? JSON.stringify(params.metadata) : null,
         now,
       );
-    return messageId;
+    return {
+      messageId,
+      action: existing?.message_id ? "updated" : "created",
+    };
   }
 
   logInteraction(input: LogInteractionInput): { interactionId: string } {
@@ -1516,6 +1623,21 @@ export class PromoterCrmStore {
             occurred_at,
             created_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(interaction_id) DO UPDATE SET
+            event_id = excluded.event_id,
+            campaign_id = excluded.campaign_id,
+            conversation_id = excluded.conversation_id,
+            message_id = excluded.message_id,
+            channel = excluded.channel,
+            kind = excluded.kind,
+            direction = excluded.direction,
+            sentiment = excluded.sentiment,
+            summary = excluded.summary,
+            outcome = excluded.outcome,
+            best_next_action = excluded.best_next_action,
+            intent_tags_json = excluded.intent_tags_json,
+            metadata_json = excluded.metadata_json,
+            occurred_at = excluded.occurred_at
         `)
         .run(
           interactionId,
@@ -1523,7 +1645,7 @@ export class PromoterCrmStore {
           maybeString(input.eventId),
           maybeString(input.campaignId),
           conversationId,
-          messageId,
+          messageId?.messageId ?? null,
           maybeString(input.channel),
           input.kind,
           maybeString(input.direction),
@@ -1803,10 +1925,11 @@ export class PromoterCrmStore {
         }
 
         try {
-          const result = this.upsertContact({
+          const preparedInput = this.prepareImportedContactInput({
             ...mapped.input,
             createdBy: input.initiatedBy,
           });
+          const result = this.upsertContact(preparedInput);
           stats[result.action] += 1;
           const item = {
             rowNumber: row.rowNumber,
@@ -1880,6 +2003,205 @@ export class PromoterCrmStore {
       csvText,
       fileName: path.basename(params.csvPath),
       sourceLabel: params.csvPath,
+      initiatedBy: params.initiatedBy,
+    });
+  }
+
+  importManychatPayload(input: ImportManychatInput): {
+    ingestJobId: string;
+    source: IngestSource;
+    fileName: string | null;
+    contactId: string | null;
+    externalContactId: string | null;
+    stats: Record<string, number>;
+    items: Array<Record<string, unknown>>;
+  } {
+    const ingestJob = this.createIngestJob({
+      source: "manychat",
+      sourceLabel: input.sourceLabel,
+      fileName: input.fileName,
+      initiatedBy: input.initiatedBy,
+    });
+    const stats = {
+      contactsCreated: 0,
+      contactsUpdated: 0,
+      contactsSkipped: 0,
+      contactsFailed: 0,
+      messagesImported: 0,
+      interactionsLogged: 0,
+    };
+    const items: Array<Record<string, unknown>> = [];
+
+    try {
+      const parsed = parseManychatPayload(input.payload);
+      if (!parsed.input) {
+        stats.contactsSkipped += 1;
+        const item = {
+          action: "skipped",
+          externalId: parsed.externalContactId ?? null,
+          error: parsed.skipReason ?? "ManyChat payload did not contain an importable contact.",
+        } satisfies Record<string, unknown>;
+        items.push(item);
+        this.appendIngestJobItem({
+          ingestJobId: ingestJob.ingestJobId,
+          externalId: parsed.externalContactId,
+          action: "skipped",
+          rawPayload: parsed.metadata,
+          errorText: parsed.skipReason,
+        });
+        this.finishIngestJob({
+          ingestJobId: ingestJob.ingestJobId,
+          status: "completed",
+          stats,
+        });
+        return {
+          ingestJobId: ingestJob.ingestJobId,
+          source: "manychat",
+          fileName: maybeString(input.fileName),
+          contactId: null,
+          externalContactId: parsed.externalContactId ?? null,
+          stats,
+          items,
+        };
+      }
+
+      const preparedInput = this.prepareImportedContactInput({
+        ...parsed.input,
+        createdBy: input.initiatedBy,
+      });
+      const contact = this.upsertContact(preparedInput);
+      if (contact.action === "created") {
+        stats.contactsCreated += 1;
+      } else {
+        stats.contactsUpdated += 1;
+      }
+      const contactItem = {
+        action: contact.action,
+        contactId: contact.contactId,
+        displayName: contact.displayName,
+        externalId: parsed.externalContactId ?? null,
+        messageCount: parsed.messages.length,
+      } satisfies Record<string, unknown>;
+      items.push(contactItem);
+      this.appendIngestJobItem({
+        ingestJobId: ingestJob.ingestJobId,
+        externalId: parsed.externalContactId,
+        action: contact.action,
+        resolvedContactId: contact.contactId,
+        rawPayload: parsed.metadata,
+      });
+
+      for (const message of parsed.messages) {
+        const occurredAt = message.occurredAt ?? nowIso();
+        const stableMessageId =
+          maybeString(message.externalMessageId) ??
+          buildStableImportId("manychat-message", [
+            parsed.externalContactId,
+            message.externalThreadId,
+            message.direction,
+            occurredAt,
+            message.content,
+          ]);
+        const interactionId = buildStableImportId("manychat-interaction", [
+          parsed.externalContactId,
+          message.externalThreadId,
+          stableMessageId,
+          message.direction,
+        ]);
+        const interactionKind: InteractionKind =
+          message.direction === "inbound" ? "reply" : "outreach";
+        const summaryPrefix =
+          message.direction === "inbound" ? "ManyChat inbound" : "ManyChat outbound";
+        const summary = `${summaryPrefix}: ${message.content.slice(0, 120)}`;
+
+        this.logInteraction({
+          interactionId,
+          contactId: contact.contactId,
+          channel: "manychat",
+          kind: interactionKind,
+          direction: message.direction,
+          summary,
+          occurredAt,
+          conversationExternalId: message.externalThreadId ?? parsed.externalThreadId,
+          messageExternalId: stableMessageId,
+          messageStatus: message.status,
+          content: message.content,
+          metadata: {
+            ...parsed.metadata,
+            manychat_message: message.metadata ?? null,
+          },
+        });
+        stats.messagesImported += 1;
+        stats.interactionsLogged += 1;
+
+        const messageItem = {
+          action: "updated",
+          contactId: contact.contactId,
+          externalId: stableMessageId,
+          direction: message.direction,
+          occurredAt,
+        } satisfies Record<string, unknown>;
+        items.push(messageItem);
+        this.appendIngestJobItem({
+          ingestJobId: ingestJob.ingestJobId,
+          externalId: stableMessageId,
+          action: "updated",
+          resolvedContactId: contact.contactId,
+          rawPayload: {
+            ...parsed.metadata,
+            message: message.metadata ?? {
+              externalMessageId: stableMessageId,
+              externalThreadId: message.externalThreadId ?? parsed.externalThreadId ?? null,
+              direction: message.direction,
+              status: message.status ?? null,
+              content: message.content,
+              occurredAt,
+            },
+          },
+        });
+      }
+
+      this.finishIngestJob({
+        ingestJobId: ingestJob.ingestJobId,
+        status: "completed",
+        stats,
+      });
+
+      return {
+        ingestJobId: ingestJob.ingestJobId,
+        source: "manychat",
+        fileName: maybeString(input.fileName),
+        contactId: contact.contactId,
+        externalContactId: parsed.externalContactId ?? null,
+        stats,
+        items,
+      };
+    } catch (err) {
+      stats.contactsFailed += 1;
+      this.finishIngestJob({
+        ingestJobId: ingestJob.ingestJobId,
+        status: "failed",
+        stats,
+      });
+      throw err;
+    }
+  }
+
+  importManychatPayloadFile(params: { jsonPath: string; initiatedBy?: string }): {
+    ingestJobId: string;
+    source: IngestSource;
+    fileName: string | null;
+    contactId: string | null;
+    externalContactId: string | null;
+    stats: Record<string, number>;
+    items: Array<Record<string, unknown>>;
+  } {
+    const raw = fs.readFileSync(params.jsonPath, "utf8");
+    const payload = JSON.parse(raw) as unknown;
+    return this.importManychatPayload({
+      payload,
+      fileName: path.basename(params.jsonPath),
+      sourceLabel: params.jsonPath,
       initiatedBy: params.initiatedBy,
     });
   }

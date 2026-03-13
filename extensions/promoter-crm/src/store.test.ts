@@ -287,6 +287,110 @@ describe("promoter CRM store", () => {
     expect(notes[0]?.body).toBe("Met at opener");
   });
 
+  it("imports ManyChat payloads into contacts, conversations, and messages idempotently", async () => {
+    const stateDir = await makeStateDir();
+    const result = withPromoterCrmStore({ stateDir }, (store) => {
+      const payload = {
+        id: "mc-501",
+        first_name: "Ava",
+        last_name: "Stone",
+        name: "Ava Stone",
+        status: "ACTIVE",
+        live_chat_url: "https://manychat.com/livechat?user_ref=mc-501",
+        last_input_text: "I'm down for Friday",
+        last_interaction: "2026-03-14T02:00:00.000Z",
+        last_growth_tool: "IG Story Reply",
+        custom_fields: {
+          phone: "+1 (212) 555-0199",
+          email: "ava@example.com",
+          instagram_handle: "@ava.stone",
+          city: "New York",
+          birthday: "1998-04-18",
+          tags: ["vip", "birthday"],
+          preferred_music: "house, afrobeats",
+          preferred_venue: "Skyline Room",
+          promoter_notes: "Brings table-ready friends",
+        },
+        messages: [
+          {
+            id: "mc-msg-1",
+            direction: "outbound",
+            text: "Friday invite?",
+            created_at: "2026-03-14T01:55:00.000Z",
+          },
+          {
+            id: "mc-msg-2",
+            direction: "inbound",
+            text: "I'm down for Friday",
+            created_at: "2026-03-14T02:00:00.000Z",
+          },
+        ],
+      };
+
+      const first = store.importManychatPayload({
+        payload,
+        sourceLabel: "manychat-test",
+        initiatedBy: "codex-test",
+      });
+      const second = store.importManychatPayload({
+        payload,
+        sourceLabel: "manychat-test",
+        initiatedBy: "codex-test",
+      });
+      const contact = first.contactId ? store.getContact(first.contactId) : null;
+      const status = store.getStatus();
+
+      return { first, second, contact, status };
+    });
+
+    expect(result.first.stats.contactsCreated).toBe(1);
+    expect(result.first.stats.messagesImported).toBe(2);
+    expect(result.second.stats.contactsUpdated).toBe(1);
+    expect(result.second.stats.messagesImported).toBe(2);
+    expect(result.status.tableCounts.contacts).toBe(1);
+    expect(result.status.tableCounts.contact_identities).toBe(4);
+    expect(result.status.tableCounts.conversations).toBe(1);
+    expect(result.status.tableCounts.messages).toBe(2);
+    expect(result.status.tableCounts.interaction_history).toBe(2);
+    expect(result.status.tableCounts.contact_notes).toBe(1);
+    expect(result.status.tableCounts.ingest_jobs).toBe(2);
+
+    const contact = result.contact?.contact as { displayName: string; city: string | null };
+    const identities = result.contact?.identities as Array<{ channel: string }>;
+    const tags = result.contact?.tags as string[];
+    const preferences = result.contact?.preferences as Array<{ category: string; value: string }>;
+    const notes = result.contact?.notes as Array<{ body: string }>;
+    const messages = result.contact?.messages as Array<{
+      channel: string;
+      direction: string;
+      content: string;
+    }>;
+    const interactions = result.contact?.interactions as Array<{ kind: string; summary: string }>;
+
+    expect(contact.displayName).toBe("Ava Stone");
+    expect(contact.city).toBe("New York");
+    expect(identities.map((entry) => entry.channel).sort()).toEqual([
+      "email",
+      "instagram",
+      "manychat",
+      "phone",
+    ]);
+    expect(tags).toEqual(["birthday", "vip"]);
+    expect(preferences).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ category: "music", value: "house" }),
+        expect.objectContaining({ category: "music", value: "afrobeats" }),
+        expect.objectContaining({ category: "venue", value: "Skyline Room" }),
+      ]),
+    );
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.body).toBe("Brings table-ready friends");
+    expect(messages).toHaveLength(2);
+    expect(messages[0]?.channel).toBe("manychat");
+    expect(interactions.map((entry) => entry.kind).sort()).toEqual(["outreach", "reply"]);
+    expect(interactions[0]?.summary).toContain("ManyChat");
+  });
+
   it("ranks persisted follow-up tasks from invite urgency and stale outreach", async () => {
     const stateDir = await makeStateDir();
     const now = Date.now();

@@ -273,8 +273,14 @@ export function ensurePromoterCrmSchema(db: DatabaseSync): void {
       content TEXT,
       sent_at TEXT NOT NULL,
       metadata_json TEXT,
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      UNIQUE(conversation_id, external_message_id)
     );
+  `);
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_conversation_external
+    ON messages(conversation_id, external_message_id)
+    WHERE external_message_id IS NOT NULL;
   `);
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_messages_conversation_sent
