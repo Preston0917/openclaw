@@ -11,6 +11,7 @@ import {
   createPromoterCrmGetContactTool,
   createPromoterCrmGetVenueAttendanceTool,
   createPromoterCrmLogInteractionTool,
+  createPromoterCrmRankFollowupsTool,
   createPromoterCrmRecordScoreTool,
   createPromoterCrmRefreshSegmentTool,
   createPromoterCrmStatusTool,
@@ -35,6 +36,7 @@ function registerTools(api: OpenClawPluginApi): void {
     createPromoterCrmLogInteractionTool(api),
     createPromoterCrmGetContactTool(api),
     createPromoterCrmGetVenueAttendanceTool(api),
+    createPromoterCrmRankFollowupsTool(api),
   ];
 
   for (const tool of tools) {
@@ -92,6 +94,26 @@ function registerCli(api: OpenClawPluginApi): void {
             store.importContactsFromCsvFile({
               csvPath,
               initiatedBy: options.initiatedBy,
+            }),
+          );
+          console.log(JSON.stringify(result, null, 2));
+        });
+
+      crm
+        .command("followup-queue")
+        .description("Refresh and show the ranked promoter CRM follow-up queue")
+        .option("--limit <n>", "Maximum tasks to return", Number)
+        .option(
+          "--min-days-since-last-interaction <n>",
+          "Minimum stale days before follow-up tasks are created",
+          Number,
+        )
+        .action(async (options: { limit?: number; minDaysSinceLastInteraction?: number }) => {
+          const stateDir = api.runtime.state.resolveStateDir(process.env);
+          const result = await withPromoterCrmStore({ stateDir }, (store) =>
+            store.rankFollowups({
+              limit: options.limit,
+              minDaysSinceLastInteraction: options.minDaysSinceLastInteraction,
             }),
           );
           console.log(JSON.stringify(result, null, 2));

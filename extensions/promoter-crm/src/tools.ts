@@ -12,6 +12,7 @@ import {
   type IdentityChannel,
   type InteractionKind,
   type InviteStatus,
+  type RankFollowupsInput,
   type RsvpStatus,
   withPromoterCrmStore,
 } from "./store.js";
@@ -337,6 +338,20 @@ const GetVenueAttendanceSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const RankFollowupsSchema = Type.Object(
+  {
+    limit: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
+    minDaysSinceLastInteraction: Type.Optional(
+      Type.Number({
+        minimum: 0,
+        maximum: 365,
+        description: "Minimum stale days before a contact becomes a follow-up candidate.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 function executeWithStore<T>(api: OpenClawPluginApi, fn: (store: PromoterCrmStore) => T): T {
   const stateDir = api.runtime.state.resolveStateDir(process.env);
   return withPromoterCrmStore({ stateDir }, fn);
@@ -626,6 +641,30 @@ export function createPromoterCrmGetVenueAttendanceTool(api: OpenClawPluginApi):
           {
             type: "text",
             text: `Loaded ${result.attendees.length} venue attendance record(s) for ${String((result.venue as { display_name?: string }).display_name ?? (params as GetVenueAttendanceParams).venueId)}.`,
+          },
+        ],
+        details: result,
+      };
+    },
+  };
+}
+
+export function createPromoterCrmRankFollowupsTool(api: OpenClawPluginApi): AnyAgentTool {
+  return {
+    name: "promoter_crm_rank_followups",
+    label: "Promoter CRM Rank Followups",
+    description:
+      "Refresh and rank the follow-up queue using score, invite state, and recency of interaction.",
+    parameters: RankFollowupsSchema,
+    execute: async (_toolCallId, params) => {
+      const result = executeWithStore(api, (store) =>
+        store.rankFollowups(params as RankFollowupsInput),
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Ranked ${result.taskCount} promoter CRM follow-up task(s).`,
           },
         ],
         details: result,

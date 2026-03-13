@@ -44,6 +44,7 @@ export type InteractionKind =
   | "summary"
   | "campaign";
 export type Direction = "inbound" | "outbound";
+export type FollowupTaskStatus = "open" | "done" | "dismissed";
 
 export type ContactIdentityInput = {
   channel: IdentityChannel;
@@ -190,6 +191,11 @@ export type ImportCsvInput = {
   initiatedBy?: string;
 };
 
+export type RankFollowupsInput = {
+  limit?: number;
+  minDaysSinceLastInteraction?: number;
+};
+
 type StoreOptions = {
   stateDir: string;
 };
@@ -248,6 +254,16 @@ type SearchContactsInput = {
 };
 
 type IngestItemAction = "created" | "updated" | "merged" | "skipped" | "failed";
+
+type FollowupCandidateRow = {
+  contact_id: string;
+  display_name: string;
+  quality_tier: ContactQualityTier | null;
+  manual_score_override: number | null;
+  latest_score: number | null;
+  last_interaction_at: string | null;
+  last_best_next_action: string | null;
+};
 
 function normalizeWhitespace(value: string | undefined): string {
   return value?.trim() ?? "";
@@ -678,6 +694,45 @@ export class PromoterCrmStore {
         LIMIT 1
       `)
       .get(contactId) as LatestScoreRow | undefined;
+    return row ?? null;
+  }
+
+  private getNextInvite(contactId: string): {
+    event_id: string;
+    campaign_id: string | null;
+    event_name: string;
+    starts_at: string;
+    invite_status: InviteStatus;
+    rsvp_status: RsvpStatus;
+  } | null {
+    const now = nowIso();
+    const row = this.db
+      .prepare(`
+        SELECT
+          ei.event_id,
+          ei.campaign_id,
+          e.display_name AS event_name,
+          e.starts_at,
+          ei.invite_status,
+          ei.rsvp_status
+        FROM event_invites ei
+        JOIN events e ON e.event_id = ei.event_id
+        WHERE ei.contact_id = ?
+          AND e.starts_at >= ?
+          AND ei.invite_status IN ('draft', 'invited', 'confirmed', 'tentative')
+        ORDER BY e.starts_at ASC
+        LIMIT 1
+      `)
+      .get(contactId, now) as
+      | {
+          event_id: string;
+          campaign_id: string | null;
+          event_name: string;
+          starts_at: string;
+          invite_status: InviteStatus;
+          rsvp_status: RsvpStatus;
+        }
+      | undefined;
     return row ?? null;
   }
 
@@ -1829,6 +1884,200 @@ export class PromoterCrmStore {
     });
   }
 
+  rankFollowups(input: RankFollowupsInput): {
+    refreshedAt: string;
+    minDaysSinceLastInteraction: number;
+    taskCount: number;
+    tasks: Array<Record<string, unknown>>;
+  } {
+    return this.withTransaction(() => {
+      const refreshedAt = nowIso();
+      const minDaysSinceLastInteraction = Math.max(
+        0,
+        Math.min(input.minDaysSinceLastInteraction ?? 7, 365),
+      );
+      const limit = Math.max(1, Math.min(input.limit ?? 25, 100));
+
+      this.db
+        .prepare(`
+          DELETE FROM followup_tasks
+          WHERE source = 'rules' AND status = 'open'
+        `)
+        .run();
+
+      const candidates = this.db
+        .prepare(`
+          SELECT
+            c.contact_id,
+            c.display_name,
+            c.quality_tier,
+            c.manual_score_override,
+            (
+              SELECT overall_score
+              FROM contact_score_snapshots css
+              WHERE css.contact_id = c.contact_id
+              ORDER BY css.created_at DESC
+              LIMIT 1
+            ) AS latest_score,
+            (
+              SELECT MAX(ih.occurred_at)
+              FROM interaction_history ih
+              WHERE ih.contact_id = c.contact_id
+            ) AS last_interaction_at,
+            (
+              SELECT best_next_action
+              FROM interaction_history ih
+              WHERE ih.contact_id = c.contact_id
+                AND ih.best_next_action IS NOT NULL
+                AND TRIM(ih.best_next_action) <> ''
+              ORDER BY ih.occurred_at DESC
+              LIMIT 1
+            ) AS last_best_next_action
+          FROM contacts c
+        `)
+        .all() as FollowupCandidateRow[];
+
+      const insert = this.db.prepare(`
+        INSERT INTO followup_tasks (
+          followup_task_id,
+          contact_id,
+          event_id,
+          campaign_id,
+          source,
+          status,
+          priority,
+          recommended_action,
+          reason,
+          due_at,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      for (const candidate of candidates) {
+        const effectiveScore =
+          maybeNumber(candidate.manual_score_override) ?? maybeNumber(candidate.latest_score) ?? 0;
+        const daysSinceLastInteraction = daysSinceTimestamp(candidate.last_interaction_at);
+        const nextInvite = this.getNextInvite(candidate.contact_id);
+        const reasons: string[] = [];
+        let recommendedAction = normalizeWhitespace(candidate.last_best_next_action ?? "");
+        let priority = Math.max(0, Math.min(100, effectiveScore * 0.55));
+        let dueAt: string | null = null;
+        let relatedEventId: string | null = null;
+        let relatedCampaignId: string | null = null;
+
+        if (candidate.quality_tier === "vip") {
+          priority += 20;
+          reasons.push("qualityTier=vip");
+        } else if (candidate.quality_tier === "regular") {
+          priority += 10;
+          reasons.push("qualityTier=regular");
+        }
+
+        if (nextInvite) {
+          const eventDate = new Date(nextInvite.starts_at);
+          const hoursUntilEvent = Number.isNaN(eventDate.getTime())
+            ? null
+            : Math.floor((eventDate.getTime() - Date.now()) / 3_600_000);
+          relatedEventId = nextInvite.event_id;
+          relatedCampaignId = nextInvite.campaign_id;
+          dueAt =
+            hoursUntilEvent !== null && hoursUntilEvent <= 48 ? refreshedAt : nextInvite.starts_at;
+          priority += 20;
+          reasons.push(`upcomingEvent=${nextInvite.event_name}`);
+          reasons.push(`inviteStatus=${nextInvite.invite_status}`);
+          if (!recommendedAction) {
+            if (
+              nextInvite.invite_status === "confirmed" &&
+              hoursUntilEvent !== null &&
+              hoursUntilEvent <= 48
+            ) {
+              recommendedAction = "confirm_arrival";
+            } else if (
+              nextInvite.invite_status === "tentative" ||
+              nextInvite.rsvp_status === "maybe"
+            ) {
+              recommendedAction = "confirm_rsvp";
+            } else {
+              recommendedAction = "send_invite_follow_up";
+            }
+          }
+        }
+
+        if (daysSinceLastInteraction === null) {
+          priority += 15;
+          reasons.push("noPriorInteraction");
+          if (!recommendedAction) {
+            recommendedAction = "introduce_contact";
+          }
+        } else if (daysSinceLastInteraction >= minDaysSinceLastInteraction) {
+          priority += Math.min(daysSinceLastInteraction * 2, 25);
+          reasons.push(`daysSinceLastInteraction=${daysSinceLastInteraction}`);
+          if (!recommendedAction) {
+            recommendedAction = "reactivate_contact";
+          }
+        }
+
+        if (!recommendedAction) {
+          continue;
+        }
+
+        if (reasons.length === 0) {
+          reasons.push("bestNextActionAvailable");
+        }
+
+        insert.run(
+          randomUUID(),
+          candidate.contact_id,
+          relatedEventId,
+          relatedCampaignId,
+          "rules",
+          "open",
+          Math.max(0, Math.min(100, Math.round(priority))),
+          recommendedAction,
+          reasons.join("; "),
+          dueAt,
+          refreshedAt,
+          refreshedAt,
+        );
+      }
+
+      const tasks = this.db
+        .prepare(`
+          SELECT
+            ft.followup_task_id,
+            ft.contact_id,
+            c.display_name AS contact_name,
+            c.quality_tier,
+            ft.event_id,
+            e.display_name AS event_name,
+            ft.campaign_id,
+            cp.display_name AS campaign_name,
+            ft.priority,
+            ft.recommended_action,
+            ft.reason,
+            ft.due_at,
+            ft.created_at,
+            ft.updated_at
+          FROM followup_tasks ft
+          JOIN contacts c ON c.contact_id = ft.contact_id
+          LEFT JOIN events e ON e.event_id = ft.event_id
+          LEFT JOIN campaigns cp ON cp.campaign_id = ft.campaign_id
+          WHERE ft.status = 'open'
+          ORDER BY ft.priority DESC, COALESCE(ft.due_at, ft.created_at) ASC, c.display_name ASC
+          LIMIT ?
+        `)
+        .all(limit) as Array<Record<string, unknown>>;
+
+      return {
+        refreshedAt,
+        minDaysSinceLastInteraction,
+        taskCount: tasks.length,
+        tasks,
+      };
+    });
+  }
+
   getVenueAttendance(input: GetVenueAttendanceInput): {
     venue: Record<string, unknown>;
     attendees: Array<Record<string, unknown>>;
@@ -2041,6 +2290,33 @@ export class PromoterCrmStore {
         LIMIT 50
       `)
       .all(contactId) as Array<Record<string, unknown>>;
+    const followupTasks = this.db
+      .prepare(`
+        SELECT
+          followup_task_id,
+          event_id,
+          campaign_id,
+          source,
+          status,
+          priority,
+          recommended_action,
+          reason,
+          due_at,
+          created_at,
+          updated_at
+        FROM followup_tasks
+        WHERE contact_id = ?
+        ORDER BY
+          CASE status
+            WHEN 'open' THEN 0
+            WHEN 'done' THEN 1
+            ELSE 2
+          END,
+          priority DESC,
+          COALESCE(due_at, created_at) ASC
+        LIMIT 25
+      `)
+      .all(contactId) as Array<Record<string, unknown>>;
 
     return {
       contact: {
@@ -2064,6 +2340,7 @@ export class PromoterCrmStore {
       segments,
       interactions,
       messages,
+      followupTasks,
     };
   }
 }

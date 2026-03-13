@@ -18,6 +18,7 @@ export const PROMOTER_CRM_TABLES = [
   "interaction_history",
   "segments",
   "segment_memberships",
+  "followup_tasks",
   "ingest_jobs",
   "ingest_job_items",
 ] as const;
@@ -328,6 +329,27 @@ export function ensurePromoterCrmSchema(db: DatabaseSync): void {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_segment_memberships_contact
     ON segment_memberships(contact_id, calculated_at DESC);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS followup_tasks (
+      followup_task_id TEXT PRIMARY KEY,
+      contact_id TEXT NOT NULL REFERENCES contacts(contact_id) ON DELETE CASCADE,
+      event_id TEXT REFERENCES events(event_id) ON DELETE SET NULL,
+      campaign_id TEXT REFERENCES campaigns(campaign_id) ON DELETE SET NULL,
+      source TEXT NOT NULL CHECK (source IN ('rules', 'manual')) DEFAULT 'rules',
+      status TEXT NOT NULL CHECK (status IN ('open', 'done', 'dismissed')) DEFAULT 'open',
+      priority REAL NOT NULL,
+      recommended_action TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      due_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_followup_tasks_status_priority
+    ON followup_tasks(status, priority DESC, due_at ASC);
   `);
 
   db.exec(`

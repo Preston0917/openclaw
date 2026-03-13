@@ -286,4 +286,100 @@ describe("promoter CRM store", () => {
     expect(preferences[0]).toMatchObject({ category: "music", value: "house" });
     expect(notes[0]?.body).toBe("Met at opener");
   });
+
+  it("ranks persisted follow-up tasks from invite urgency and stale outreach", async () => {
+    const stateDir = await makeStateDir();
+    const now = Date.now();
+    const result = withPromoterCrmStore({ stateDir }, (store) => {
+      const vip = store.upsertContact({
+        displayName: "Nina Vale",
+        qualityTier: "vip",
+        identities: [{ channel: "phone", phoneE164: "+12125550155", isPrimary: true }],
+      });
+      const stale = store.upsertContact({
+        displayName: "Jules Hart",
+        identities: [{ channel: "instagram", handle: "@juleshart", isPrimary: true }],
+      });
+      const fresh = store.upsertContact({
+        displayName: "Kai Bloom",
+        identities: [{ channel: "email", email: "kai@example.com", isPrimary: true }],
+      });
+
+      store.recordScore({ contactId: vip.contactId, overallScore: 95, rationale: "VIP regular." });
+      store.recordScore({
+        contactId: stale.contactId,
+        overallScore: 74,
+        rationale: "Good lead, needs reactivation.",
+      });
+      store.recordScore({
+        contactId: fresh.contactId,
+        overallScore: 81,
+        rationale: "Recently active.",
+      });
+
+      const event = store.upsertEvent({
+        name: "Saturday Headliner",
+        startsAt: new Date(now + 24 * 3_600_000).toISOString(),
+        venue: {
+          name: "Lotus Room",
+          city: "New York",
+        },
+      });
+      const campaign = store.upsertCampaign({
+        eventId: event.eventId,
+        displayName: "Headliner confirmations",
+        status: "active",
+      });
+      store.upsertInvite({
+        contactId: vip.contactId,
+        eventId: event.eventId,
+        campaignId: campaign.campaignId,
+        inviteStatus: "confirmed",
+        rsvpStatus: "yes",
+      });
+
+      store.logInteraction({
+        contactId: stale.contactId,
+        channel: "instagram",
+        kind: "outreach",
+        direction: "outbound",
+        summary: "Checked in after a quiet stretch.",
+        occurredAt: new Date(now - 12 * 86_400_000).toISOString(),
+      });
+      store.logInteraction({
+        contactId: fresh.contactId,
+        channel: "email",
+        kind: "reply",
+        direction: "inbound",
+        summary: "Recently replied about next week.",
+        occurredAt: new Date(now - 1 * 86_400_000).toISOString(),
+      });
+
+      const queue = store.rankFollowups({ limit: 10, minDaysSinceLastInteraction: 7 });
+      const vipView = store.getContact(vip.contactId);
+      const staleView = store.getContact(stale.contactId);
+      const freshView = store.getContact(fresh.contactId);
+
+      return { queue, vipView, staleView, freshView };
+    });
+
+    const tasks = result.queue.tasks as Array<{
+      contact_name: string;
+      recommended_action: string;
+      priority: number;
+    }>;
+    const vipTasks = result.vipView.followupTasks as Array<{ recommended_action: string }>;
+    const staleTasks = result.staleView.followupTasks as Array<{ recommended_action: string }>;
+    const freshTasks = result.freshView.followupTasks as Array<{ recommended_action: string }>;
+
+    expect(result.queue.taskCount).toBe(2);
+    expect(tasks[0]?.contact_name).toBe("Nina Vale");
+    expect(tasks[0]?.recommended_action).toBe("confirm_arrival");
+    expect(tasks[0]?.priority).toBeGreaterThan(tasks[1]?.priority ?? 0);
+    expect(tasks[1]?.contact_name).toBe("Jules Hart");
+    expect(tasks[1]?.recommended_action).toBe("reactivate_contact");
+    expect(vipTasks[0]?.recommended_action).toBe("confirm_arrival");
+    expect(staleTasks[0]?.recommended_action).toBe("reactivate_contact");
+    expect(freshTasks).toHaveLength(0);
+  });
 });

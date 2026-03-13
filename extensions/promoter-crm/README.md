@@ -60,6 +60,7 @@ maps onto the current SQLite schema.
             "promoter_crm_upsert_invite",
             "promoter_crm_upsert_segment",
             "promoter_crm_refresh_segment",
+            "promoter_crm_rank_followups",
             "promoter_crm_log_interaction",
             "promoter_crm_get_contact",
             "promoter_crm_get_venue_attendance"
@@ -77,6 +78,7 @@ maps onto the current SQLite schema.
 openclaw promoter-crm init
 openclaw promoter-crm status
 openclaw promoter-crm import-csv ./contacts.csv
+openclaw promoter-crm followup-queue --limit 25
 ```
 
 ## What it covers today
@@ -92,6 +94,7 @@ openclaw promoter-crm import-csv ./contacts.csv
 - Venue attendance lookup across events through the normalized invite path
 - CSV contact import with ingest job auditing
 - Operational ingest tables for future Google Contacts and ManyChat syncs
+- Persisted follow-up queue ranking driven by score, invite state, and stale conversations
 
 ## Foundation docs
 
