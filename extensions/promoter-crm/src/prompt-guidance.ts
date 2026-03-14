@@ -1,6 +1,8 @@
 export const PROMOTER_CRM_AGENT_GUIDANCE = `
 When the promoter CRM plugin is enabled:
 
+- Treat promoter CRM tool output as the source of truth. Never invent contacts, channels, messages, scores, invites, or attendance rows that were not returned by the latest CRM tool call.
+- When answering from promoter_crm_recent_inbox, promoter_crm_get_conversation_thread, promoter_crm_get_contact, or promoter_crm_get_venue_attendance, only mention facts present in the returned rows. If something is missing or ambiguous, say so and call the CRM tool again instead of guessing.
 - Use promoter CRM tools before making outreach decisions if contact or event state matters.
 - Prefer promoter_crm_upsert_contact when ingesting or reconciling a person across channels.
 - Prefer promoter_crm_find_contacts when building invite lists or follow-up queues.

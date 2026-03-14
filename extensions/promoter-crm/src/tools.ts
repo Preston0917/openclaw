@@ -395,6 +395,166 @@ function executeWithStore<T>(api: OpenClawPluginApi, fn: (store: PromoterCrmStor
   return withPromoterCrmStore({ stateDir }, fn);
 }
 
+type ToolResultRecord = Record<string, unknown>;
+
+function readRecord(value: unknown): ToolResultRecord | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as ToolResultRecord;
+}
+
+function readText(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return "";
+}
+
+function readNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function readTextArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((entry) => readText(entry)).filter(Boolean);
+}
+
+function collapseWhitespace(value: unknown, maxLength = 160): string {
+  const text = readText(value).replace(/\s+/g, " ").trim();
+  if (!text) {
+    return "(none)";
+  }
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+function quotePreview(value: unknown, maxLength = 160): string {
+  const preview = collapseWhitespace(value, maxLength);
+  return preview === "(none)" ? preview : `"${preview}"`;
+}
+
+function formatIso(value: unknown): string {
+  const text = readText(value);
+  return text || "unknown";
+}
+
+function formatIdentity(value: unknown): string {
+  const record = readRecord(value);
+  if (!record) {
+    return "(none)";
+  }
+  const channel = readText(record.channel) || "unknown";
+  const specific =
+    readText(record.handle) ||
+    readText(record.externalId) ||
+    readText(record.external_id) ||
+    readText(record.email) ||
+    readText(record.phoneE164) ||
+    readText(record.phone_e164);
+  return specific ? `${channel}:${specific}` : channel;
+}
+
+export function renderPromoterCrmRecentInboxGroundingText(result: {
+  refreshedAt: string;
+  conversations: Array<Record<string, unknown>>;
+}): string {
+  const lines = [
+    `Grounded promoter CRM inbox snapshot at ${result.refreshedAt}.`,
+    "Use only the contacts, channels, timestamps, and message previews returned below. If a fact is missing, say so and call promoter_crm_recent_inbox again instead of guessing.",
+    `Returned conversations: ${result.conversations.length}.`,
+  ];
+
+  if (result.conversations.length === 0) {
+    lines.push("No CRM conversations matched this query.");
+    return lines.join("\n");
+  }
+
+  result.conversations.forEach((conversation, index) => {
+    const counts = readRecord(conversation.counts);
+    const lastMessage = readRecord(conversation.lastMessage);
+    const tags = readTextArray(conversation.tags);
+    const followups = Array.isArray(conversation.openFollowupTasks)
+      ? conversation.openFollowupTasks.length
+      : 0;
+
+    lines.push(
+      `${index + 1}. ${collapseWhitespace(conversation.contactName, 80)} | channel=${readText(conversation.channel) || "unknown"} | needsReply=${conversation.needsReply === true ? "yes" : "no"} | lastActivityAt=${formatIso(conversation.lastActivityAt)}`,
+    );
+    lines.push(
+      `   lastMessage=${quotePreview(lastMessage?.preview ?? lastMessage?.content)} | total=${readNumber(counts?.totalMessages) ?? 0} inbound=${readNumber(counts?.inboundMessages) ?? 0} outbound=${readNumber(counts?.outboundMessages) ?? 0}`,
+    );
+    lines.push(
+      `   primaryIdentity=${formatIdentity(conversation.primaryIdentity)} | tags=${tags.length > 0 ? tags.join(", ") : "(none)"} | openFollowups=${followups}`,
+    );
+  });
+
+  return lines.join("\n");
+}
+
+export function renderPromoterCrmConversationThreadGroundingText(result: {
+  contact: Record<string, unknown>;
+  identities: Array<Record<string, unknown>>;
+  tags: string[];
+  latestScore: Record<string, unknown> | null;
+  conversation: Record<string, unknown>;
+  messages: Array<Record<string, unknown>>;
+  interactions: Array<Record<string, unknown>>;
+  followupTasks: Array<Record<string, unknown>>;
+}): string {
+  const contact = readRecord(result.contact) ?? {};
+  const conversation = readRecord(result.conversation) ?? {};
+  const latestScore = readRecord(result.latestScore);
+
+  const lines = [
+    "Grounded promoter CRM conversation thread.",
+    "Use only the contact, channel, timestamps, message previews, and interaction notes returned below. If a fact is missing, say so and call promoter_crm_get_conversation_thread again instead of guessing.",
+    `Contact: ${collapseWhitespace(contact.displayName ?? contact.contactId, 80)} | qualityTier=${readText(contact.qualityTier) || "(none)"} | city=${readText(contact.city) || "(none)"}`,
+    `Conversation: channel=${readText(conversation.channel) || "unknown"} | needsReply=${conversation.needsReply === true ? "yes" : "no"} | lastActivityAt=${formatIso(conversation.lastActivityAt)} | totalMessages=${readNumber(readRecord(conversation.counts)?.totalMessages) ?? 0}`,
+    `Tags: ${result.tags.length > 0 ? result.tags.join(", ") : "(none)"} | identities=${result.identities.length > 0 ? result.identities.map((identity) => formatIdentity(identity)).join(", ") : "(none)"}`,
+    `Latest score: ${latestScore ? String(readNumber(latestScore.overallScore ?? latestScore.overall_score) ?? "(none)") : "(none)"}`,
+    "Messages:",
+  ];
+
+  if (result.messages.length === 0) {
+    lines.push("- none");
+  } else {
+    result.messages.forEach((message, index) => {
+      lines.push(
+        `${index + 1}. [${formatIso(message.sentAt ?? message.sent_at)}] ${readText(message.direction) || "unknown"} ${quotePreview(message.preview ?? message.content, 200)}`,
+      );
+    });
+  }
+
+  lines.push("Interactions:");
+  if (result.interactions.length === 0) {
+    lines.push("- none");
+  } else {
+    result.interactions.forEach((interaction, index) => {
+      lines.push(
+        `${index + 1}. [${formatIso(interaction.occurredAt ?? interaction.occurred_at)}] ${readText(interaction.kind) || "interaction"} ${quotePreview(interaction.summary, 180)}`,
+      );
+    });
+  }
+
+  lines.push(`Open follow-up tasks: ${result.followupTasks.length}`);
+  return lines.join("\n");
+}
+
 type UpsertContactParams = Static<typeof UpsertContactSchema>;
 type FindContactsParams = Static<typeof FindContactsSchema>;
 type RecordScoreParams = Static<typeof RecordScoreSchema>;
@@ -692,20 +852,24 @@ export function createPromoterCrmRecentInboxTool(api: OpenClawPluginApi): AnyAge
     name: "promoter_crm_recent_inbox",
     label: "Promoter CRM Recent Inbox",
     description:
-      "List the most recent CRM conversations with last-message context, reply pressure, tags, and open follow-ups.",
+      "List the most recent CRM conversations with last-message context, reply pressure, tags, and open follow-ups. Use only returned rows as grounded CRM facts.",
     parameters: RecentInboxSchema,
     execute: async (_toolCallId, params) => {
       const result = executeWithStore(api, (store) =>
         store.getRecentInbox(params as RecentInboxInput),
       );
+      const groundingText = renderPromoterCrmRecentInboxGroundingText(result);
       return {
         content: [
           {
             type: "text",
-            text: `Loaded ${result.conversations.length} recent promoter CRM conversation(s).`,
+            text: groundingText,
           },
         ],
-        details: result,
+        details: {
+          ...result,
+          groundingText,
+        },
       };
     },
   };
@@ -716,20 +880,24 @@ export function createPromoterCrmGetConversationThreadTool(api: OpenClawPluginAp
     name: "promoter_crm_get_conversation_thread",
     label: "Promoter CRM Get Conversation Thread",
     description:
-      "Fetch a normalized conversation thread with contact context, message history, follow-up tasks, and interaction notes.",
+      "Fetch a normalized conversation thread with contact context, message history, follow-up tasks, and interaction notes. Use only returned rows as grounded CRM facts.",
     parameters: GetConversationThreadSchema,
     execute: async (_toolCallId, params) => {
       const result = executeWithStore(api, (store) =>
         store.getConversationThread(params as GetConversationThreadInput),
       );
+      const groundingText = renderPromoterCrmConversationThreadGroundingText(result);
       return {
         content: [
           {
             type: "text",
-            text: `Loaded conversation thread ${String((result.conversation as { conversationId?: string }).conversationId ?? "unknown")}.`,
+            text: groundingText,
           },
         ],
-        details: result,
+        details: {
+          ...result,
+          groundingText,
+        },
       };
     },
   };
