@@ -391,6 +391,96 @@ describe("promoter CRM store", () => {
     expect(interactions[0]?.summary).toContain("ManyChat");
   });
 
+  it("builds a recent inbox and conversation thread from normalized ManyChat messages", async () => {
+    const stateDir = await makeStateDir();
+    const result = withPromoterCrmStore({ stateDir }, (store) => {
+      const payload = {
+        id: "mc-900",
+        first_name: "Marc",
+        last_name: "Bieber",
+        name: "Marc Bieber",
+        status: "ACTIVE",
+        ig_username: "marc.b",
+        last_interaction: "2026-03-14T03:10:00.000Z",
+        messages: [
+          {
+            id: "mc-msg-a",
+            direction: "outbound",
+            text: "Send me what you're thinking for Friday.",
+            created_at: "2026-03-14T03:00:00.000Z",
+          },
+          {
+            id: "mc-msg-b",
+            direction: "inbound",
+            text: "Here is the vibe I'm thinking",
+            created_at: "2026-03-14T03:05:00.000Z",
+          },
+          {
+            id: "mc-msg-c",
+            direction: "inbound",
+            text: "https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=123",
+            created_at: "2026-03-14T03:10:00.000Z",
+          },
+        ],
+      };
+
+      const imported = store.importManychatPayload({
+        payload,
+        sourceLabel: "manychat-inbox-test",
+        initiatedBy: "codex-test",
+      });
+      const inbox = store.getRecentInbox({
+        channel: "manychat",
+        limit: 10,
+        onlyNeedsReply: true,
+      });
+      const thread = imported.contactId
+        ? store.getConversationThread({
+            contactId: imported.contactId,
+            channel: "manychat",
+            limit: 10,
+          })
+        : null;
+
+      return { imported, inbox, thread };
+    });
+
+    const conversations = result.inbox.conversations as Array<{
+      contactName: string;
+      needsReply: boolean;
+      lastMessage: {
+        contentType: string;
+        preview: string;
+      };
+    }>;
+    const threadMessages = result.thread?.messages as Array<{
+      direction: string;
+      contentType: string;
+      content: string;
+      attachmentUrls: string[];
+    }>;
+    const threadConversation = result.thread?.conversation as {
+      channel: string;
+      needsReply: boolean;
+    };
+
+    expect(result.imported.stats.messagesImported).toBe(3);
+    expect(conversations).toHaveLength(1);
+    expect(conversations[0]?.contactName).toBe("Marc Bieber");
+    expect(conversations[0]?.needsReply).toBe(true);
+    expect(conversations[0]?.lastMessage.contentType).toBe("attachment");
+    expect(conversations[0]?.lastMessage.preview).toBe("Instagram media attachment");
+    expect(threadConversation?.channel).toBe("manychat");
+    expect(threadConversation?.needsReply).toBe(true);
+    expect(threadMessages).toHaveLength(3);
+    expect(threadMessages[2]?.direction).toBe("inbound");
+    expect(threadMessages[2]?.contentType).toBe("attachment");
+    expect(threadMessages[2]?.content).toContain("lookaside.fbsbx.com");
+    expect(threadMessages[2]?.attachmentUrls).toEqual([
+      "https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=123",
+    ]);
+  });
+
   it("ranks persisted follow-up tasks from invite urgency and stale outreach", async () => {
     const stateDir = await makeStateDir();
     const now = Date.now();

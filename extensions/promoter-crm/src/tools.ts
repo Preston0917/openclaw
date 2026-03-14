@@ -12,6 +12,8 @@ import {
   type IdentityChannel,
   type InteractionKind,
   type InviteStatus,
+  type GetConversationThreadInput,
+  type RecentInboxInput,
   type RankFollowupsInput,
   type RsvpStatus,
   withPromoterCrmStore,
@@ -338,6 +340,42 @@ const GetVenueAttendanceSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const RecentInboxSchema = Type.Object(
+  {
+    limit: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
+    channel: Type.Optional(stringEnum(IDENTITY_CHANNELS, "Optional channel filter.")),
+    sinceHours: Type.Optional(
+      Type.Number({
+        minimum: 0,
+        maximum: 24 * 30,
+        description: "Only include conversations active within this many hours.",
+      }),
+    ),
+    onlyNeedsReply: Type.Optional(
+      Type.Boolean({
+        description: "If true, only return conversations where the latest message is inbound.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const GetConversationThreadSchema = Type.Object(
+  {
+    conversationId: Type.Optional(Type.String({ description: "Conversation id to inspect." })),
+    contactId: Type.Optional(
+      Type.String({
+        description: "Fallback contact id when you want the latest thread for a contact.",
+      }),
+    ),
+    channel: Type.Optional(
+      stringEnum(IDENTITY_CHANNELS, "Optional channel when resolving a contact's thread."),
+    ),
+    limit: Type.Optional(Type.Number({ minimum: 1, maximum: 200 })),
+  },
+  { additionalProperties: false },
+);
+
 const RankFollowupsSchema = Type.Object(
   {
     limit: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
@@ -641,6 +679,54 @@ export function createPromoterCrmGetVenueAttendanceTool(api: OpenClawPluginApi):
           {
             type: "text",
             text: `Loaded ${result.attendees.length} venue attendance record(s) for ${String((result.venue as { display_name?: string }).display_name ?? (params as GetVenueAttendanceParams).venueId)}.`,
+          },
+        ],
+        details: result,
+      };
+    },
+  };
+}
+
+export function createPromoterCrmRecentInboxTool(api: OpenClawPluginApi): AnyAgentTool {
+  return {
+    name: "promoter_crm_recent_inbox",
+    label: "Promoter CRM Recent Inbox",
+    description:
+      "List the most recent CRM conversations with last-message context, reply pressure, tags, and open follow-ups.",
+    parameters: RecentInboxSchema,
+    execute: async (_toolCallId, params) => {
+      const result = executeWithStore(api, (store) =>
+        store.getRecentInbox(params as RecentInboxInput),
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Loaded ${result.conversations.length} recent promoter CRM conversation(s).`,
+          },
+        ],
+        details: result,
+      };
+    },
+  };
+}
+
+export function createPromoterCrmGetConversationThreadTool(api: OpenClawPluginApi): AnyAgentTool {
+  return {
+    name: "promoter_crm_get_conversation_thread",
+    label: "Promoter CRM Get Conversation Thread",
+    description:
+      "Fetch a normalized conversation thread with contact context, message history, follow-up tasks, and interaction notes.",
+    parameters: GetConversationThreadSchema,
+    execute: async (_toolCallId, params) => {
+      const result = executeWithStore(api, (store) =>
+        store.getConversationThread(params as GetConversationThreadInput),
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Loaded conversation thread ${String((result.conversation as { conversationId?: string }).conversationId ?? "unknown")}.`,
           },
         ],
         details: result,

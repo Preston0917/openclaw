@@ -63,7 +63,9 @@ maps onto the current SQLite schema.
             "promoter_crm_rank_followups",
             "promoter_crm_log_interaction",
             "promoter_crm_get_contact",
-            "promoter_crm_get_venue_attendance"
+            "promoter_crm_get_venue_attendance",
+            "promoter_crm_recent_inbox",
+            "promoter_crm_get_conversation_thread"
           ]
         }
       }
@@ -80,6 +82,8 @@ openclaw promoter-crm status
 openclaw promoter-crm import-csv ./contacts.csv
 openclaw promoter-crm import-manychat ./manychat-contact.json
 openclaw promoter-crm followup-queue --limit 25
+openclaw promoter-crm recent-inbox --limit 20 --only-needs-reply
+openclaw promoter-crm conversation-thread --contact-id <contact-id> --channel manychat
 ```
 
 ## What it covers today
@@ -97,6 +101,7 @@ openclaw promoter-crm followup-queue --limit 25
 - ManyChat JSON and webhook ingestion into normalized contacts, conversations, messages, and interaction history
 - Operational ingest tables for future Google Contacts syncs
 - Persisted follow-up queue ranking driven by score, invite state, and stale conversations
+- Read-model inbox queries for recent inbound conversations and normalized thread inspection
 
 ## Foundation docs
 

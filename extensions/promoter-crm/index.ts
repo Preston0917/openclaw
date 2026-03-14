@@ -6,12 +6,18 @@ import type {
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/core";
 import { createManychatWebhookHandler } from "./src/manychat-webhook.js";
 import { PROMOTER_CRM_AGENT_GUIDANCE } from "./src/prompt-guidance.js";
-import { resolvePromoterCrmPaths, withPromoterCrmStore } from "./src/store.js";
+import {
+  type IdentityChannel,
+  resolvePromoterCrmPaths,
+  withPromoterCrmStore,
+} from "./src/store.js";
 import {
   createPromoterCrmFindContactsTool,
   createPromoterCrmGetContactTool,
+  createPromoterCrmGetConversationThreadTool,
   createPromoterCrmGetVenueAttendanceTool,
   createPromoterCrmLogInteractionTool,
+  createPromoterCrmRecentInboxTool,
   createPromoterCrmRankFollowupsTool,
   createPromoterCrmRecordScoreTool,
   createPromoterCrmRefreshSegmentTool,
@@ -37,6 +43,8 @@ function registerTools(api: OpenClawPluginApi): void {
     createPromoterCrmLogInteractionTool(api),
     createPromoterCrmGetContactTool(api),
     createPromoterCrmGetVenueAttendanceTool(api),
+    createPromoterCrmRecentInboxTool(api),
+    createPromoterCrmGetConversationThreadTool(api),
     createPromoterCrmRankFollowupsTool(api),
   ];
 
@@ -119,6 +127,63 @@ function registerCli(api: OpenClawPluginApi): void {
           );
           console.log(JSON.stringify(result, null, 2));
         });
+
+      crm
+        .command("recent-inbox")
+        .description("Show the most recent CRM conversations and inbound messages")
+        .option("--limit <n>", "Maximum conversations to return", Number)
+        .option("--channel <channel>", "Optional channel filter, such as manychat or instagram")
+        .option("--since-hours <n>", "Only include conversations active within this many hours", Number)
+        .option(
+          "--only-needs-reply",
+          "Only return conversations where the latest message is inbound",
+        )
+        .action(
+          async (options: {
+            limit?: number;
+            channel?: string;
+            sinceHours?: number;
+            onlyNeedsReply?: boolean;
+          }) => {
+            const stateDir = api.runtime.state.resolveStateDir(process.env);
+            const result = await withPromoterCrmStore({ stateDir }, (store) =>
+              store.getRecentInbox({
+                limit: options.limit,
+                channel: options.channel as IdentityChannel | undefined,
+                sinceHours: options.sinceHours,
+                onlyNeedsReply: options.onlyNeedsReply,
+              }),
+            );
+            console.log(JSON.stringify(result, null, 2));
+          },
+        );
+
+      crm
+        .command("conversation-thread")
+        .description("Show a normalized CRM conversation thread")
+        .option("--conversation-id <id>", "Conversation id to inspect")
+        .option("--contact-id <id>", "Fallback contact id to resolve the latest conversation")
+        .option("--channel <channel>", "Optional channel filter when using --contact-id")
+        .option("--limit <n>", "Maximum messages to return", Number)
+        .action(
+          async (options: {
+            conversationId?: string;
+            contactId?: string;
+            channel?: string;
+            limit?: number;
+          }) => {
+            const stateDir = api.runtime.state.resolveStateDir(process.env);
+            const result = await withPromoterCrmStore({ stateDir }, (store) =>
+              store.getConversationThread({
+                conversationId: options.conversationId,
+                contactId: options.contactId,
+                channel: options.channel as IdentityChannel | undefined,
+                limit: options.limit,
+              }),
+            );
+            console.log(JSON.stringify(result, null, 2));
+          },
+        );
 
       crm
         .command("import-manychat")

@@ -8,6 +8,8 @@ When the promoter CRM plugin is enabled:
 - Prefer promoter_crm_upsert_event, promoter_crm_upsert_campaign, and promoter_crm_upsert_invite for event planning and RSVP tracking.
 - Prefer promoter_crm_upsert_segment and promoter_crm_refresh_segment when saving or recalculating audience segments.
 - Prefer promoter_crm_get_venue_attendance when you need to answer who attended, flaked, or was invited at a venue.
+- Prefer promoter_crm_recent_inbox when you need to see who messaged recently or which conversations need a reply.
+- Prefer promoter_crm_get_conversation_thread when you need the latest thread context before summarizing or drafting a reply.
 - Prefer promoter_crm_rank_followups when deciding who the promoter should hit next.
 - Prefer promoter_crm_log_interaction after meaningful outreach, replies, summaries, or attendance updates.
 - Prefer promoter_crm_get_contact before drafting personalized outreach so you can use unified history, notes, invites, and latest score context.

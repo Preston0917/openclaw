@@ -262,6 +262,10 @@ export function ensurePromoterCrmSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_conversations_contact_updated
     ON conversations(contact_id, updated_at DESC);
   `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_conversations_channel_last_message
+    ON conversations(channel, last_message_at DESC);
+  `);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS messages (
@@ -285,6 +289,75 @@ export function ensurePromoterCrmSchema(db: DatabaseSync): void {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_messages_conversation_sent
     ON messages(conversation_id, sent_at DESC);
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_messages_direction_sent
+    ON messages(direction, sent_at DESC);
+  `);
+  db.exec(`
+    CREATE VIEW IF NOT EXISTS conversation_inbox AS
+    SELECT
+      conv.conversation_id,
+      conv.contact_id,
+      c.display_name AS contact_name,
+      conv.channel,
+      conv.external_thread_id,
+      conv.status AS conversation_status,
+      conv.started_at,
+      conv.last_message_at,
+      last_message.message_id AS last_message_id,
+      last_message.direction AS last_message_direction,
+      last_message.status AS last_message_status,
+      last_message.content AS last_message_content,
+      last_message.sent_at AS last_message_sent_at,
+      last_inbound.message_id AS last_inbound_message_id,
+      last_inbound.content AS last_inbound_content,
+      last_inbound.sent_at AS last_inbound_at,
+      last_outbound.message_id AS last_outbound_message_id,
+      last_outbound.content AS last_outbound_content,
+      last_outbound.sent_at AS last_outbound_at,
+      (
+        SELECT COUNT(*)
+        FROM messages m_count
+        WHERE m_count.conversation_id = conv.conversation_id
+      ) AS total_message_count,
+      (
+        SELECT COUNT(*)
+        FROM messages m_count
+        WHERE m_count.conversation_id = conv.conversation_id
+          AND m_count.direction = 'inbound'
+      ) AS inbound_message_count,
+      (
+        SELECT COUNT(*)
+        FROM messages m_count
+        WHERE m_count.conversation_id = conv.conversation_id
+          AND m_count.direction = 'outbound'
+      ) AS outbound_message_count
+    FROM conversations conv
+    JOIN contacts c ON c.contact_id = conv.contact_id
+    LEFT JOIN messages last_message ON last_message.message_id = (
+      SELECT m_latest.message_id
+      FROM messages m_latest
+      WHERE m_latest.conversation_id = conv.conversation_id
+      ORDER BY m_latest.sent_at DESC, m_latest.created_at DESC
+      LIMIT 1
+    )
+    LEFT JOIN messages last_inbound ON last_inbound.message_id = (
+      SELECT m_inbound.message_id
+      FROM messages m_inbound
+      WHERE m_inbound.conversation_id = conv.conversation_id
+        AND m_inbound.direction = 'inbound'
+      ORDER BY m_inbound.sent_at DESC, m_inbound.created_at DESC
+      LIMIT 1
+    )
+    LEFT JOIN messages last_outbound ON last_outbound.message_id = (
+      SELECT m_outbound.message_id
+      FROM messages m_outbound
+      WHERE m_outbound.conversation_id = conv.conversation_id
+        AND m_outbound.direction = 'outbound'
+      ORDER BY m_outbound.sent_at DESC, m_outbound.created_at DESC
+      LIMIT 1
+    );
   `);
 
   db.exec(`

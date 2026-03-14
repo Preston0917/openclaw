@@ -185,6 +185,20 @@ export type GetVenueAttendanceInput = {
   limit?: number;
 };
 
+export type RecentInboxInput = {
+  limit?: number;
+  channel?: IdentityChannel;
+  sinceHours?: number;
+  onlyNeedsReply?: boolean;
+};
+
+export type GetConversationThreadInput = {
+  conversationId?: string;
+  contactId?: string;
+  channel?: IdentityChannel;
+  limit?: number;
+};
+
 export type ImportCsvInput = {
   csvText: string;
   fileName?: string;
@@ -271,6 +285,44 @@ type FollowupCandidateRow = {
   latest_score: number | null;
   last_interaction_at: string | null;
   last_best_next_action: string | null;
+};
+
+type InboxConversationRow = {
+  conversation_id: string;
+  contact_id: string;
+  contact_name: string;
+  quality_tier: ContactQualityTier | null;
+  latest_score: number | null;
+  channel: IdentityChannel;
+  external_thread_id: string | null;
+  conversation_status: "active" | "archived";
+  started_at: string;
+  last_message_at: string;
+  last_message_id: string | null;
+  last_message_direction: Direction | null;
+  last_message_status: string | null;
+  last_message_content: string | null;
+  last_message_sent_at: string | null;
+  last_inbound_message_id: string | null;
+  last_inbound_content: string | null;
+  last_inbound_at: string | null;
+  last_outbound_message_id: string | null;
+  last_outbound_content: string | null;
+  last_outbound_at: string | null;
+  total_message_count: number;
+  inbound_message_count: number;
+  outbound_message_count: number;
+};
+
+type ConversationMessageRow = {
+  message_id: string;
+  external_message_id: string | null;
+  direction: Direction;
+  status: string | null;
+  content: string | null;
+  sent_at: string;
+  metadata_json: string | null;
+  created_at: string;
 };
 
 function normalizeWhitespace(value: string | undefined): string {
@@ -368,6 +420,49 @@ function parseJsonObject(value: string | null | undefined): Record<string, unkno
     return null;
   }
   return null;
+}
+
+function extractUrls(value: string | null | undefined): string[] {
+  if (!value) {
+    return [];
+  }
+  const matches = value.match(/https?:\/\/[^\s"'<>]+/g);
+  return matches ? [...new Set(matches)] : [];
+}
+
+function presentMessageContent(content: string | null | undefined): {
+  contentType: "empty" | "text" | "link" | "attachment";
+  preview: string | null;
+  attachmentUrls: string[];
+} {
+  const normalized = maybeString(content ?? undefined);
+  if (!normalized) {
+    return {
+      contentType: "empty",
+      preview: null,
+      attachmentUrls: [],
+    };
+  }
+
+  const urls = extractUrls(normalized);
+  const isStandaloneUrl = urls.length === 1 && normalized === urls[0];
+  if (isStandaloneUrl) {
+    const url = urls[0]!;
+    const isInstagramAttachment =
+      url.includes("lookaside.fbsbx.com/ig_messaging_cdn") ||
+      url.includes("instagram.com");
+    return {
+      contentType: isInstagramAttachment ? "attachment" : "link",
+      preview: isInstagramAttachment ? "Instagram media attachment" : url,
+      attachmentUrls: urls,
+    };
+  }
+
+  return {
+    contentType: "text",
+    preview: normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized,
+    attachmentUrls: [],
+  };
 }
 
 function normalizeSegmentDefinition(input: SegmentDefinition | undefined): SegmentDefinition {
@@ -2504,6 +2599,386 @@ export class PromoterCrmStore {
       `)
       .all(contactId) as Array<Record<string, unknown>>;
     return rows;
+  }
+
+  private listOpenFollowupTasks(
+    contactId: string,
+    limit = 3,
+  ): Array<Record<string, unknown>> {
+    const effectiveLimit = Math.max(1, Math.min(limit, 25));
+    return this.db
+      .prepare(`
+        SELECT
+          followup_task_id,
+          event_id,
+          campaign_id,
+          source,
+          status,
+          priority,
+          recommended_action,
+          reason,
+          due_at,
+          created_at,
+          updated_at
+        FROM followup_tasks
+        WHERE contact_id = ?
+          AND status = 'open'
+        ORDER BY priority DESC, COALESCE(due_at, created_at) ASC
+        LIMIT ?
+      `)
+      .all(contactId, effectiveLimit) as Array<Record<string, unknown>>;
+  }
+
+  private findConversationInboxRow(input: {
+    conversationId?: string;
+    contactId?: string;
+    channel?: IdentityChannel;
+  }): InboxConversationRow | null {
+    const filters: string[] = [];
+    const params: Array<string | number> = [];
+
+    if (input.conversationId) {
+      filters.push("ci.conversation_id = ?");
+      params.push(input.conversationId);
+    } else if (input.contactId) {
+      filters.push("ci.contact_id = ?");
+      params.push(input.contactId);
+      if (input.channel) {
+        filters.push("ci.channel = ?");
+        params.push(input.channel);
+      }
+    } else {
+      throw new Error("Conversation lookup requires conversationId or contactId");
+    }
+
+    const whereClause = `WHERE ${filters.join(" AND ")}`;
+    const row = this.db
+      .prepare(`
+        SELECT
+          ci.conversation_id,
+          ci.contact_id,
+          ci.contact_name,
+          c.quality_tier,
+          (
+            SELECT overall_score
+            FROM contact_score_snapshots css
+            WHERE css.contact_id = ci.contact_id
+            ORDER BY css.created_at DESC
+            LIMIT 1
+          ) AS latest_score,
+          ci.channel,
+          ci.external_thread_id,
+          ci.conversation_status,
+          ci.started_at,
+          ci.last_message_at,
+          ci.last_message_id,
+          ci.last_message_direction,
+          ci.last_message_status,
+          ci.last_message_content,
+          ci.last_message_sent_at,
+          ci.last_inbound_message_id,
+          ci.last_inbound_content,
+          ci.last_inbound_at,
+          ci.last_outbound_message_id,
+          ci.last_outbound_content,
+          ci.last_outbound_at,
+          ci.total_message_count,
+          ci.inbound_message_count,
+          ci.outbound_message_count
+        FROM conversation_inbox ci
+        JOIN contacts c ON c.contact_id = ci.contact_id
+        ${whereClause}
+        ORDER BY COALESCE(ci.last_inbound_at, ci.last_message_sent_at, ci.last_message_at) DESC
+        LIMIT 1
+      `)
+      .get(...params) as InboxConversationRow | undefined;
+    return row ?? null;
+  }
+
+  getRecentInbox(input: RecentInboxInput): {
+    refreshedAt: string;
+    conversations: Array<Record<string, unknown>>;
+  } {
+    const filters: string[] = [];
+    const params: Array<string | number> = [];
+
+    if (input.channel) {
+      filters.push("ci.channel = ?");
+      params.push(input.channel);
+    }
+
+    if (input.onlyNeedsReply) {
+      filters.push("ci.last_message_direction = 'inbound'");
+    }
+
+    if (typeof input.sinceHours === "number" && Number.isFinite(input.sinceHours)) {
+      const boundedHours = Math.max(0, Math.min(input.sinceHours, 24 * 30));
+      const threshold = new Date(Date.now() - boundedHours * 3_600_000).toISOString();
+      filters.push("COALESCE(ci.last_inbound_at, ci.last_message_sent_at, ci.last_message_at) >= ?");
+      params.push(threshold);
+    }
+
+    const limit = Math.max(1, Math.min(input.limit ?? 25, 100));
+    params.push(limit);
+    const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+
+    const rows = this.db
+      .prepare(`
+        SELECT
+          ci.conversation_id,
+          ci.contact_id,
+          ci.contact_name,
+          c.quality_tier,
+          (
+            SELECT overall_score
+            FROM contact_score_snapshots css
+            WHERE css.contact_id = ci.contact_id
+            ORDER BY css.created_at DESC
+            LIMIT 1
+          ) AS latest_score,
+          ci.channel,
+          ci.external_thread_id,
+          ci.conversation_status,
+          ci.started_at,
+          ci.last_message_at,
+          ci.last_message_id,
+          ci.last_message_direction,
+          ci.last_message_status,
+          ci.last_message_content,
+          ci.last_message_sent_at,
+          ci.last_inbound_message_id,
+          ci.last_inbound_content,
+          ci.last_inbound_at,
+          ci.last_outbound_message_id,
+          ci.last_outbound_content,
+          ci.last_outbound_at,
+          ci.total_message_count,
+          ci.inbound_message_count,
+          ci.outbound_message_count
+        FROM conversation_inbox ci
+        JOIN contacts c ON c.contact_id = ci.contact_id
+        ${whereClause}
+        ORDER BY
+          COALESCE(ci.last_inbound_at, ci.last_message_sent_at, ci.last_message_at) DESC,
+          ci.last_message_at DESC
+        LIMIT ?
+      `)
+      .all(...params) as InboxConversationRow[];
+
+    const conversations = rows.map((row) => {
+      const lastMessage = presentMessageContent(row.last_message_content);
+      const lastInboundMessage = presentMessageContent(row.last_inbound_content);
+      const identities = this.listContactIdentities(row.contact_id);
+      const openFollowupTasks = this.listOpenFollowupTasks(row.contact_id, 3);
+      return {
+        conversationId: row.conversation_id,
+        contactId: row.contact_id,
+        contactName: row.contact_name,
+        channel: row.channel,
+        externalThreadId: row.external_thread_id,
+        status: row.conversation_status,
+        qualityTier: row.quality_tier,
+        latestScore: row.latest_score,
+        startedAt: row.started_at,
+        lastMessageAt: row.last_message_at,
+        lastActivityAt: row.last_inbound_at ?? row.last_message_sent_at ?? row.last_message_at,
+        needsReply: row.last_message_direction === "inbound",
+        counts: {
+          totalMessages: row.total_message_count,
+          inboundMessages: row.inbound_message_count,
+          outboundMessages: row.outbound_message_count,
+        },
+        lastMessage: {
+          messageId: row.last_message_id,
+          direction: row.last_message_direction,
+          status: row.last_message_status,
+          content: row.last_message_content,
+          contentType: lastMessage.contentType,
+          preview: lastMessage.preview,
+          attachmentUrls: lastMessage.attachmentUrls,
+          sentAt: row.last_message_sent_at ?? row.last_message_at,
+        },
+        lastInboundMessage: row.last_inbound_message_id
+          ? {
+              messageId: row.last_inbound_message_id,
+              content: row.last_inbound_content,
+              contentType: lastInboundMessage.contentType,
+              preview: lastInboundMessage.preview,
+              attachmentUrls: lastInboundMessage.attachmentUrls,
+              sentAt: row.last_inbound_at,
+            }
+          : null,
+        tags: this.listContactTags(row.contact_id),
+        primaryIdentity: identities[0] ?? null,
+        openFollowupTasks,
+      };
+    });
+
+    return {
+      refreshedAt: nowIso(),
+      conversations,
+    };
+  }
+
+  getConversationThread(input: GetConversationThreadInput): {
+    contact: Record<string, unknown>;
+    identities: Array<Record<string, unknown>>;
+    tags: string[];
+    latestScore: LatestScoreRow | null;
+    conversation: Record<string, unknown>;
+    messages: Array<Record<string, unknown>>;
+    interactions: Array<Record<string, unknown>>;
+    followupTasks: Array<Record<string, unknown>>;
+  } {
+    const conversationRow = this.findConversationInboxRow(input);
+    if (!conversationRow) {
+      if (input.conversationId) {
+        throw new Error(`Conversation not found: ${input.conversationId}`);
+      }
+      throw new Error("Conversation not found for the requested contact/channel");
+    }
+
+    const contact = this.getContactRow(conversationRow.contact_id);
+    const latestScore = this.getLatestScore(conversationRow.contact_id);
+    const identities = this.listContactIdentities(conversationRow.contact_id);
+    const tags = this.listContactTags(conversationRow.contact_id);
+    const followupTasks = this.listOpenFollowupTasks(conversationRow.contact_id, 10);
+    const limit = Math.max(1, Math.min(input.limit ?? 50, 200));
+
+    const messageRows = this.db
+      .prepare(`
+        SELECT
+          message_id,
+          external_message_id,
+          direction,
+          status,
+          content,
+          sent_at,
+          metadata_json,
+          created_at
+        FROM messages
+        WHERE conversation_id = ?
+        ORDER BY sent_at DESC, created_at DESC
+        LIMIT ?
+      `)
+      .all(conversationRow.conversation_id, limit) as ConversationMessageRow[];
+    const messages = [...messageRows]
+      .reverse()
+      .map((row) => {
+        const metadata = parseJsonObject(row.metadata_json);
+        const presentation = presentMessageContent(row.content);
+        return {
+          messageId: row.message_id,
+          externalMessageId: row.external_message_id,
+          direction: row.direction,
+          status: row.status,
+          content: row.content,
+          contentType: presentation.contentType,
+          preview: presentation.preview,
+          attachmentUrls: presentation.attachmentUrls,
+          sentAt: row.sent_at,
+          createdAt: row.created_at,
+          metadata,
+        };
+      });
+
+    const interactions = this.db
+      .prepare(`
+        SELECT
+          interaction_id,
+          event_id,
+          campaign_id,
+          message_id,
+          channel,
+          kind,
+          direction,
+          sentiment,
+          summary,
+          outcome,
+          best_next_action,
+          intent_tags_json,
+          metadata_json,
+          occurred_at
+        FROM interaction_history
+        WHERE conversation_id = ?
+        ORDER BY occurred_at DESC
+        LIMIT 20
+      `)
+      .all(conversationRow.conversation_id)
+      .map((row) => {
+        const entry = row as Record<string, unknown> & {
+          intent_tags_json?: string;
+          metadata_json?: string;
+        };
+        return {
+          ...entry,
+          intent_tags: parseJsonArray(entry.intent_tags_json),
+          metadata: parseJsonObject(entry.metadata_json),
+        };
+      });
+
+    const lastMessage = presentMessageContent(conversationRow.last_message_content);
+    const lastInboundMessage = presentMessageContent(conversationRow.last_inbound_content);
+
+    return {
+      contact: {
+        contactId: contact.contact_id,
+        displayName: contact.display_name,
+        firstName: contact.first_name,
+        lastName: contact.last_name,
+        city: contact.city,
+        birthday: contact.birthday,
+        qualityTier: contact.quality_tier,
+        manualScoreOverride: contact.manual_score_override,
+        createdAt: contact.created_at,
+        updatedAt: contact.updated_at,
+      },
+      identities,
+      tags,
+      latestScore,
+      conversation: {
+        conversationId: conversationRow.conversation_id,
+        contactId: conversationRow.contact_id,
+        channel: conversationRow.channel,
+        externalThreadId: conversationRow.external_thread_id,
+        status: conversationRow.conversation_status,
+        startedAt: conversationRow.started_at,
+        lastMessageAt: conversationRow.last_message_at,
+        lastActivityAt:
+          conversationRow.last_inbound_at ??
+          conversationRow.last_message_sent_at ??
+          conversationRow.last_message_at,
+        needsReply: conversationRow.last_message_direction === "inbound",
+        counts: {
+          totalMessages: conversationRow.total_message_count,
+          inboundMessages: conversationRow.inbound_message_count,
+          outboundMessages: conversationRow.outbound_message_count,
+        },
+        lastMessage: {
+          messageId: conversationRow.last_message_id,
+          direction: conversationRow.last_message_direction,
+          status: conversationRow.last_message_status,
+          content: conversationRow.last_message_content,
+          contentType: lastMessage.contentType,
+          preview: lastMessage.preview,
+          attachmentUrls: lastMessage.attachmentUrls,
+          sentAt: conversationRow.last_message_sent_at ?? conversationRow.last_message_at,
+        },
+        lastInboundMessage: conversationRow.last_inbound_message_id
+          ? {
+              messageId: conversationRow.last_inbound_message_id,
+              content: conversationRow.last_inbound_content,
+              contentType: lastInboundMessage.contentType,
+              preview: lastInboundMessage.preview,
+              attachmentUrls: lastInboundMessage.attachmentUrls,
+              sentAt: conversationRow.last_inbound_at,
+            }
+          : null,
+      },
+      messages,
+      interactions,
+      followupTasks,
+    };
   }
 
   getContact(contactId: string): Record<string, unknown> {
