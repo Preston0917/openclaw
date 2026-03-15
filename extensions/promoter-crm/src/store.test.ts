@@ -539,6 +539,94 @@ describe("promoter CRM store", () => {
     ]);
   });
 
+  it("logs outbound replies directly onto an existing conversation thread", async () => {
+    const stateDir = await makeStateDir();
+    const result = withPromoterCrmStore({ stateDir }, (store) => {
+      const contact = store.upsertContact({
+        displayName: "Amanda Bracaj",
+        identities: [
+          {
+            channel: "manychat",
+            externalId: "1629294916",
+            isPrimary: true,
+            replyUrl: "https://app.manychat.com/fb3160512/chat/1629294916",
+          },
+          {
+            channel: "instagram",
+            handle: "@amanda_bracaj",
+            profileUrl: "https://www.instagram.com/amanda_bracaj/",
+          },
+        ],
+      });
+
+      store.logInteraction({
+        contactId: contact.contactId,
+        channel: "manychat",
+        kind: "reply",
+        direction: "inbound",
+        summary: "Inbound DM from Amanda.",
+        content: "I wanna come out tn",
+        conversationExternalId: "https://app.manychat.com/fb3160512/chat/1629294916",
+        occurredAt: "2026-03-15T18:26:52.654Z",
+      });
+
+      const before = store.getConversationThread({
+        contactId: contact.contactId,
+        channel: "instagram",
+        limit: 10,
+      });
+      const conversation = before.conversation as { conversationId: string };
+
+      store.logInteraction({
+        contactId: contact.contactId,
+        conversationId: conversation.conversationId,
+        channel: "manychat",
+        kind: "reply",
+        direction: "outbound",
+        summary: "Manual outbound reply: Pull up around 11:30 and I got you.",
+        content: "Pull up around 11:30 and I got you.",
+        messageStatus: "logged",
+        occurredAt: "2026-03-15T18:28:12.000Z",
+        metadata: { source: "manual_panel_log" },
+      });
+
+      const after = store.getConversationThread({
+        conversationId: conversation.conversationId,
+        channel: "instagram",
+        limit: 10,
+      });
+
+      return { before, after };
+    });
+
+    const messages = result.after.messages as Array<{
+      direction: string;
+      content: string;
+      status: string;
+      metadata?: { source?: string };
+      sentAt: string;
+    }>;
+    const conversation = result.after.conversation as {
+      conversationId: string;
+      needsReply: boolean;
+      lastMessageAt: string;
+      matchedChannel: string;
+      channelLabel: string;
+    };
+
+    expect((result.before.messages as Array<unknown>).length).toBe(1);
+    expect(messages).toHaveLength(2);
+    expect(messages[1]?.direction).toBe("outbound");
+    expect(messages[1]?.content).toBe("Pull up around 11:30 and I got you.");
+    expect(messages[1]?.status).toBe("logged");
+    expect(messages[1]?.metadata?.source).toBe("manual_panel_log");
+    expect(messages[1]?.sentAt).toBe("2026-03-15T18:28:12.000Z");
+    expect(conversation.needsReply).toBe(false);
+    expect(conversation.lastMessageAt).toBe("2026-03-15T18:28:12.000Z");
+    expect(conversation.matchedChannel).toBe("instagram");
+    expect(conversation.channelLabel).toBe("instagram via manychat");
+  });
+
   it("ranks persisted follow-up tasks from invite urgency and stale outreach", async () => {
     const stateDir = await makeStateDir();
     const now = Date.now();

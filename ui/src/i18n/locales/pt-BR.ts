@@ -27,6 +27,7 @@ export const pt_BR: TranslationMap = {
   tabs: {
     agents: "Agentes",
     overview: "Visão Geral",
+    crm: "CRM",
     channels: "Canais",
     instances: "Instâncias",
     sessions: "Sessões",
@@ -47,6 +48,7 @@ export const pt_BR: TranslationMap = {
   subtitles: {
     agents: "Espaços, ferramentas, identidades.",
     overview: "Status, entrada, saúde.",
+    crm: "Inbox de leads, threads e respostas.",
     channels: "Canais e configurações.",
     instances: "Clientes e nós conectados.",
     sessions: "Sessões ativas e padrões.",

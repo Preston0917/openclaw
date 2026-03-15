@@ -17,6 +17,7 @@ import { loadCronJobs, loadCronRuns, loadCronStatus } from "./controllers/cron.t
 import { loadDebug } from "./controllers/debug.ts";
 import { loadDevices } from "./controllers/devices.ts";
 import { loadExecApprovals } from "./controllers/exec-approvals.ts";
+import { loadCrmInbox } from "./controllers/crm.ts";
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
@@ -200,6 +201,9 @@ export function setThemeMode(
 export async function refreshActiveTab(host: SettingsHost) {
   if (host.tab === "overview") {
     await loadOverview(host);
+  }
+  if (host.tab === "crm") {
+    await loadCrmInbox(host as unknown as Parameters<typeof loadCrmInbox>[0]);
   }
   if (host.tab === "channels") {
     await loadChannelsTab(host);

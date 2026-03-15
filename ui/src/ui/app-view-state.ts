@@ -4,6 +4,11 @@ import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type {
+  CrmChannelFilter,
+  CrmConversationThread,
+  CrmInboxItem,
+} from "./controllers/crm.ts";
 import type { SkillMessage } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
@@ -290,6 +295,22 @@ export type AppViewState = {
     logsLimit: number;
     logsMaxBytes: number;
     logsAtBottom: boolean;
+    crmInboxLoading: boolean;
+    crmInboxError: string | null;
+    crmInboxRefreshedAt: string | null;
+    crmInboxItems: CrmInboxItem[];
+    crmThreadLoading: boolean;
+    crmThreadError: string | null;
+    crmThread: CrmConversationThread | null;
+    crmSelectedConversationId: string | null;
+    crmChannelFilter: CrmChannelFilter;
+    crmNeedsReplyOnly: boolean;
+    crmSearchQuery: string;
+    crmComposerText: string;
+    crmSendBusy: boolean;
+    crmLogBusy: boolean;
+    crmActionMessage: string | null;
+    crmActionError: string | null;
     updateAvailable: import("./types.js").UpdateAvailable | null;
     attentionItems: AttentionItem[];
     paletteOpen: boolean;

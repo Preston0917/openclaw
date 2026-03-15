@@ -27,6 +27,7 @@ export const zh_CN: TranslationMap = {
   tabs: {
     agents: "代理",
     overview: "概览",
+    crm: "CRM",
     channels: "频道",
     instances: "实例",
     sessions: "会话",
@@ -47,6 +48,7 @@ export const zh_CN: TranslationMap = {
   subtitles: {
     agents: "工作区、工具、身份。",
     overview: "状态、入口点、健康。",
+    crm: "线索收件箱、会话线程与回复。",
     channels: "频道和设置。",
     instances: "已连接客户端和节点。",
     sessions: "活动会话和默认设置。",

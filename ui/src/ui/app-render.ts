@@ -63,6 +63,12 @@ import {
   saveExecApprovals,
   updateExecApprovalsFormValue,
 } from "./controllers/exec-approvals.ts";
+import {
+  loadCrmInbox,
+  loadCrmThread,
+  logCrmManualReply,
+  sendCrmReply,
+} from "./controllers/crm.ts";
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
@@ -119,6 +125,7 @@ function createLazy<T>(loader: () => Promise<T>): () => T | null {
 const lazyAgents = createLazy(() => import("./views/agents.ts"));
 const lazyChannels = createLazy(() => import("./views/channels.ts"));
 const lazyCron = createLazy(() => import("./views/cron.ts"));
+const lazyCrm = createLazy(() => import("./views/crm.ts"));
 const lazyDebug = createLazy(() => import("./views/debug.ts"));
 const lazyInstances = createLazy(() => import("./views/instances.ts"));
 const lazyLogs = createLazy(() => import("./views/logs.ts"));
@@ -656,6 +663,73 @@ export function renderApp(state: AppViewState) {
                 onNavigate: (tab) => state.setTab(tab as import("./navigation.ts").Tab),
                 onRefreshLogs: () => state.loadOverview(),
               })
+            : nothing
+        }
+
+        ${
+          state.tab === "crm"
+            ? lazyRender(lazyCrm, (m) =>
+                m.renderCrm({
+                  inboxLoading: state.crmInboxLoading,
+                  inboxError: state.crmInboxError,
+                  inboxRefreshedAt: state.crmInboxRefreshedAt,
+                  inboxItems: state.crmInboxItems,
+                  threadLoading: state.crmThreadLoading,
+                  threadError: state.crmThreadError,
+                  thread: state.crmThread,
+                  selectedConversationId: state.crmSelectedConversationId,
+                  channelFilter: state.crmChannelFilter,
+                  needsReplyOnly: state.crmNeedsReplyOnly,
+                  searchQuery: state.crmSearchQuery,
+                  composerText: state.crmComposerText,
+                  sendBusy: state.crmSendBusy,
+                  logBusy: state.crmLogBusy,
+                  actionMessage: state.crmActionMessage,
+                  actionError: state.crmActionError,
+                  onRefresh: () => loadCrmInbox(state),
+                  onSelectConversation: (conversationId) => {
+                    state.crmSelectedConversationId = conversationId;
+                    void loadCrmThread(state, { conversationId });
+                  },
+                  onChannelFilterChange: (next) => {
+                    state.crmChannelFilter = next;
+                    state.crmActionError = null;
+                    state.crmActionMessage = null;
+                    void loadCrmInbox(state);
+                  },
+                  onNeedsReplyOnlyChange: (next) => {
+                    state.crmNeedsReplyOnly = next;
+                    void loadCrmInbox(state);
+                  },
+                  onSearchQueryChange: (next) => {
+                    state.crmSearchQuery = next;
+                  },
+                  onComposerTextChange: (next) => {
+                    state.crmComposerText = next;
+                  },
+                  onSendReply: () => void sendCrmReply(state),
+                  onLogReply: () => void logCrmManualReply(state),
+                  onDraftInChat: () => {
+                    const contact = (state.crmThread?.contact ?? {}) as Record<string, unknown>;
+                    const conversation = (state.crmThread?.conversation ?? {}) as Record<
+                      string,
+                      unknown
+                    >;
+                    const conversationId =
+                      typeof conversation.conversationId === "string"
+                        ? conversation.conversationId
+                        : state.crmSelectedConversationId;
+                    const contactName =
+                      typeof contact.displayName === "string" && contact.displayName.trim()
+                        ? contact.displayName
+                        : "this lead";
+                    state.chatMessage = conversationId
+                      ? `Use the promoter CRM thread for conversation ${conversationId} (${contactName}) and draft a short reply in my tone. Do not send it.`
+                      : `Draft a short reply in my tone for ${contactName}. Do not send it.`;
+                    state.setTab("chat");
+                  },
+                }),
+              )
             : nothing
         }
 

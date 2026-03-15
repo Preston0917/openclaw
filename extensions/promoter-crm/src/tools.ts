@@ -1025,30 +1025,34 @@ export function createPromoterCrmSendManychatReplyTool(api: OpenClawPluginApi): 
       const summaryPreview = collapseWhitespace(typed.text, 120);
 
       executeWithStore(api, (store) =>
-        store.logInteraction({
-          interactionId,
-          contactId: target.contactId,
-          channel: "manychat",
-          kind: "outreach",
-          direction: "outbound",
-          summary: `ManyChat outbound reply: ${summaryPreview}`,
-          occurredAt,
-          conversationExternalId: target.externalThreadId ?? target.replyUrl ?? undefined,
-          messageExternalId,
-          messageStatus: "sent",
-          content: typed.text,
-          metadata: {
-            provider: "manychat",
-            endpoint: providerResult.endpoint,
-            responseStatus: providerResult.responseStatus,
-            responseBody: providerResult.responseBody,
-            requestBody: providerResult.requestBody,
-            subscriberId: target.subscriberId,
-            replyUrl: target.replyUrl,
-            profileUrl: target.profileUrl,
-            instagramProfileUrl: target.instagramProfileUrl,
-          },
-        }),
+        {
+          const interaction = store.logInteraction({
+            interactionId,
+            contactId: target.contactId,
+            conversationId: target.conversationId,
+            channel: "manychat",
+            kind: "reply",
+            direction: "outbound",
+            summary: `ManyChat outbound reply: ${summaryPreview}`,
+            occurredAt,
+            messageExternalId,
+            messageStatus: "sent",
+            content: typed.text,
+            metadata: {
+              provider: "manychat",
+              endpoint: providerResult.endpoint,
+              responseStatus: providerResult.responseStatus,
+              responseBody: providerResult.responseBody,
+              requestBody: providerResult.requestBody,
+              subscriberId: target.subscriberId,
+              replyUrl: target.replyUrl,
+              profileUrl: target.profileUrl,
+              instagramProfileUrl: target.instagramProfileUrl,
+            },
+          });
+          store.completeOpenFollowupTasks(target.contactId);
+          return interaction;
+        },
       );
 
       return {

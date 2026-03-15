@@ -6,6 +6,7 @@ import type {
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/core";
 import { createManychatWebhookHandler } from "./src/manychat-webhook.js";
 import { PROMOTER_CRM_AGENT_GUIDANCE } from "./src/prompt-guidance.js";
+import { registerPromoterCrmGatewayMethods } from "./src/gateway-methods.js";
 import {
   type IdentityChannel,
   resolvePromoterCrmPaths,
@@ -249,6 +250,7 @@ const plugin = {
   configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     registerTools(api);
+    registerPromoterCrmGatewayMethods(api);
     api.registerService(createPromoterCrmService(api));
     registerCli(api);
     api.registerHttpRoute({

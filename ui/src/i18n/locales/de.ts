@@ -25,6 +25,7 @@ export const de: TranslationMap = {
   tabs: {
     agents: "Agenten",
     overview: "Übersicht",
+    crm: "CRM",
     channels: "Kanäle",
     instances: "Instanzen",
     sessions: "Sitzungen",
@@ -40,6 +41,7 @@ export const de: TranslationMap = {
   subtitles: {
     agents: "Agent-Arbeitsbereiche, Tools und Identitäten verwalten.",
     overview: "Gateway-Status, Einstiegspunkte und eine schnelle Zustandsprüfung.",
+    crm: "Lead-Postfach, Threads und Antworten.",
     channels: "Kanäle und Einstellungen verwalten.",
     instances: "Präsenzsignale von verbundenen Clients und Geräten.",
     sessions: "Aktive Sitzungen inspizieren und Standardeinstellungen pro Sitzung anpassen.",

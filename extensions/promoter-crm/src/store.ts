@@ -142,6 +142,7 @@ export type UpsertInviteInput = {
 export type LogInteractionInput = {
   interactionId?: string;
   contactId: string;
+  conversationId?: string;
   eventId?: string;
   campaignId?: string;
   channel?: IdentityChannel;
@@ -1998,15 +1999,46 @@ export class PromoterCrmStore {
     return this.withTransaction(() => {
       this.getContactRow(input.contactId);
       const occurredAt = input.occurredAt ?? nowIso();
-      const conversationId =
-        input.channel && input.conversationExternalId
-          ? this.upsertConversation({
-              contactId: input.contactId,
-              channel: input.channel,
-              externalThreadId: input.conversationExternalId,
-              occurredAt,
-            })
-          : null;
+      let conversationId = maybeString(input.conversationId);
+      let conversationChannel: IdentityChannel | null = maybeString(input.channel) as IdentityChannel | null;
+
+      if (conversationId) {
+        const existingConversation = this.db
+          .prepare(`
+            SELECT conversation_id, contact_id, channel
+            FROM conversations
+            WHERE conversation_id = ?
+          `)
+          .get(conversationId) as
+          | { conversation_id?: string; contact_id?: string; channel?: IdentityChannel }
+          | undefined;
+        if (!existingConversation?.conversation_id) {
+          throw new Error(`Conversation not found: ${conversationId}`);
+        }
+        if (existingConversation.contact_id !== input.contactId) {
+          throw new Error("Conversation does not belong to the requested contact.");
+        }
+        conversationChannel = existingConversation.channel ?? conversationChannel ?? null;
+      } else if (input.channel && input.conversationExternalId) {
+        conversationId = this.upsertConversation({
+          contactId: input.contactId,
+          channel: input.channel,
+          externalThreadId: input.conversationExternalId,
+          occurredAt,
+        });
+        conversationChannel = input.channel;
+      }
+
+      if (conversationId) {
+        this.db
+          .prepare(`
+            UPDATE conversations
+            SET last_message_at = ?, updated_at = ?
+            WHERE conversation_id = ?
+          `)
+          .run(occurredAt, nowIso(), conversationId);
+      }
+
       const messageId =
         conversationId && (input.messageExternalId || input.content)
           ? this.upsertMessage({
@@ -2066,7 +2098,7 @@ export class PromoterCrmStore {
           maybeString(input.campaignId),
           conversationId,
           messageId?.messageId ?? null,
-          maybeString(input.channel),
+          maybeString(conversationChannel ?? input.channel),
           input.kind,
           maybeString(input.direction),
           maybeString(input.sentiment),
@@ -2080,6 +2112,31 @@ export class PromoterCrmStore {
         );
       return { interactionId };
     });
+  }
+
+  completeOpenFollowupTasks(
+    contactId: string,
+    status: Exclude<FollowupTaskStatus, "open"> = "done",
+  ): {
+    contactId: string;
+    updatedCount: number;
+    status: Exclude<FollowupTaskStatus, "open">;
+  } {
+    this.getContactRow(contactId);
+    const updatedAt = nowIso();
+    const result = this.db
+      .prepare(`
+        UPDATE followup_tasks
+        SET status = ?, updated_at = ?
+        WHERE contact_id = ?
+          AND status = 'open'
+      `)
+      .run(status, updatedAt, contactId);
+    return {
+      contactId,
+      updatedCount: Number(result.changes ?? 0),
+      status,
+    };
   }
 
   upsertSegment(input: UpsertSegmentInput): {

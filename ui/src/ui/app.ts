@@ -55,6 +55,11 @@ import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
+import type {
+  CrmChannelFilter,
+  CrmConversationThread,
+  CrmInboxItem,
+} from "./controllers/crm.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
@@ -426,6 +431,23 @@ export class OpenClawApp extends LitElement {
   @state() logsLimit = 500;
   @state() logsMaxBytes = 250_000;
   @state() logsAtBottom = true;
+
+  @state() crmInboxLoading = false;
+  @state() crmInboxError: string | null = null;
+  @state() crmInboxRefreshedAt: string | null = null;
+  @state() crmInboxItems: CrmInboxItem[] = [];
+  @state() crmThreadLoading = false;
+  @state() crmThreadError: string | null = null;
+  @state() crmThread: CrmConversationThread | null = null;
+  @state() crmSelectedConversationId: string | null = null;
+  @state() crmChannelFilter: CrmChannelFilter = "instagram";
+  @state() crmNeedsReplyOnly = true;
+  @state() crmSearchQuery = "";
+  @state() crmComposerText = "";
+  @state() crmSendBusy = false;
+  @state() crmLogBusy = false;
+  @state() crmActionMessage: string | null = null;
+  @state() crmActionError: string | null = null;
 
   client: GatewayBrowserClient | null = null;
   private chatScrollFrame: number | null = null;
