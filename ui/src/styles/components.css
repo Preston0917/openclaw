@@ -3771,9 +3771,11 @@
   display: grid;
   grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
   gap: 18px;
-  height: calc(100dvh - var(--topbar-height, 72px) - 36px);
+  height: calc(100dvh - var(--topbar-height, 72px) - 72px);
+  max-height: calc(100dvh - var(--topbar-height, 72px) - 72px);
   min-height: 0;
   align-items: stretch;
+  overflow: hidden;
 }
 
 .crm-panel {
@@ -3787,6 +3789,7 @@
 .crm-panel--thread {
   grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   min-height: 0;
+  align-content: stretch;
 }
 
 .crm-panel__header {
@@ -3961,6 +3964,8 @@
     linear-gradient(180deg, color-mix(in srgb, var(--bg) 60%, transparent), transparent 120px),
     color-mix(in srgb, var(--secondary) 38%, transparent);
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  overscroll-behavior: contain;
+  scroll-padding-bottom: 16px;
 }
 
 .crm-message-row {
@@ -4022,11 +4027,33 @@
   flex-wrap: wrap;
 }
 
+.crm-message__attachment-link {
+  display: inline-flex;
+  max-width: min(320px, 56vw);
+}
+
+.crm-message__attachment-image {
+  display: block;
+  width: 100%;
+  max-width: min(320px, 56vw);
+  max-height: 360px;
+  object-fit: cover;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  box-shadow: var(--shadow-sm);
+  background: color-mix(in srgb, var(--secondary) 88%, transparent);
+}
+
 .crm-composer {
   display: grid;
   gap: 12px;
   min-height: 0;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin-top: 4px;
   padding-top: 12px;
+  padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
   background:
     linear-gradient(180deg, color-mix(in srgb, transparent 0%, transparent), var(--card) 24px),
     var(--card);
@@ -4098,6 +4125,11 @@
 
   .crm-thread {
     height: auto;
+  }
+
+  .crm-message__attachment-link,
+  .crm-message__attachment-image {
+    max-width: min(100%, 320px);
   }
 
   .crm-panel--thread {
