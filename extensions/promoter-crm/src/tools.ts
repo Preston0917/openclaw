@@ -106,6 +106,15 @@ const IdentitySchema = Type.Object(
     phoneE164: Type.Optional(
       Type.String({ description: "Phone number in E.164 or near-E.164 format." }),
     ),
+    profileUrl: Type.Optional(
+      Type.String({ description: "Channel profile or deep-link URL for this identity." }),
+    ),
+    replyUrl: Type.Optional(
+      Type.String({ description: "Best known reply/chat URL for this identity." }),
+    ),
+    avatarUrl: Type.Optional(
+      Type.String({ description: "Avatar or profile image URL for this identity." }),
+    ),
     source: Type.Optional(Type.String({ description: "Original import source label." })),
     isPrimary: Type.Optional(Type.Boolean({ description: "Mark as the primary identity." })),
     confidence: Type.Optional(
@@ -469,6 +478,11 @@ function formatIdentity(value: unknown): string {
   return specific ? `${channel}:${specific}` : channel;
 }
 
+function formatUrlFact(label: string, value: unknown): string {
+  const text = readText(value);
+  return text ? `${label}=${text}` : `${label}=(none)`;
+}
+
 export function renderPromoterCrmRecentInboxGroundingText(result: {
   refreshedAt: string;
   conversations: Array<Record<string, unknown>>;
@@ -501,6 +515,9 @@ export function renderPromoterCrmRecentInboxGroundingText(result: {
     lines.push(
       `   primaryIdentity=${formatIdentity(conversation.primaryIdentity)} | tags=${tags.length > 0 ? tags.join(", ") : "(none)"} | openFollowups=${followups}`,
     );
+    lines.push(
+      `   ${formatUrlFact("replyUrl", conversation.replyUrl)} | ${formatUrlFact("profileUrl", conversation.profileUrl)}`,
+    );
   });
 
   return lines.join("\n");
@@ -526,6 +543,7 @@ export function renderPromoterCrmConversationThreadGroundingText(result: {
     `Contact: ${collapseWhitespace(contact.displayName ?? contact.contactId, 80)} | qualityTier=${readText(contact.qualityTier) || "(none)"} | city=${readText(contact.city) || "(none)"}`,
     `Conversation: channel=${readText(conversation.channel) || "unknown"} | needsReply=${conversation.needsReply === true ? "yes" : "no"} | lastActivityAt=${formatIso(conversation.lastActivityAt)} | totalMessages=${readNumber(readRecord(conversation.counts)?.totalMessages) ?? 0}`,
     `Tags: ${result.tags.length > 0 ? result.tags.join(", ") : "(none)"} | identities=${result.identities.length > 0 ? result.identities.map((identity) => formatIdentity(identity)).join(", ") : "(none)"}`,
+    `Links: ${formatUrlFact("replyUrl", conversation.replyUrl)} | ${formatUrlFact("profileUrl", conversation.profileUrl)}`,
     `Latest score: ${latestScore ? String(readNumber(latestScore.overallScore ?? latestScore.overall_score) ?? "(none)") : "(none)"}`,
     "Messages:",
   ];

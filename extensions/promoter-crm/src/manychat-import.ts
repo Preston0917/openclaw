@@ -29,7 +29,15 @@ export type ManychatContactDraft = {
 
 const PHONE_KEYS = ["phone", "phone_e164", "mobile", "mobile_phone", "phone_number", "sms_phone"];
 const EMAIL_KEYS = ["email", "email_address", "mail"];
-const INSTAGRAM_KEYS = ["instagram", "instagram_handle", "instagram_username", "ig", "ig_handle"];
+const INSTAGRAM_KEYS = [
+  "instagram",
+  "instagram_handle",
+  "instagram_username",
+  "ig_username",
+  "ig",
+  "ig_handle",
+];
+const INSTAGRAM_ID_KEYS = ["ig_id", "instagram_id"];
 const WHATSAPP_PHONE_KEYS = ["whatsapp", "whatsapp_phone", "wa_phone"];
 const WHATSAPP_ID_KEYS = ["whatsapp_id", "wa_id"];
 const CITY_KEYS = ["city", "borough", "location", "home_city"];
@@ -86,6 +94,10 @@ const PREFERENCE_FIELDS: Array<{
 
 function normalizeWhitespace(value: string | undefined): string {
   return value?.trim() ?? "";
+}
+
+function normalizeHandle(value: string | undefined): string {
+  return normalizeWhitespace(value).replace(/^@+/, "");
 }
 
 function normalizeKey(value: string): string {
@@ -233,6 +245,11 @@ function pushPreferenceValues(
   for (const value of values) {
     preferences.push({ category, preference, value });
   }
+}
+
+function buildInstagramProfileUrl(handle: string | undefined): string | undefined {
+  const normalizedHandle = normalizeHandle(handle);
+  return normalizedHandle ? `https://www.instagram.com/${normalizedHandle}/` : undefined;
 }
 
 function looksLikeManychatContact(record: Record<string, unknown> | null): boolean {
@@ -460,11 +477,20 @@ export function parseManychatPayload(payload: unknown): ManychatContactDraft {
   const qualityTier = parseQualityTier(firstString(contact, QUALITY_TIER_KEYS, customFields));
   const note = firstString(contact, NOTE_KEYS, customFields);
   const tags = splitMultiValue(customFields.tags ?? customFields.tag ?? customFields.labels);
+  const liveChatUrl =
+    firstString(contact, ["live_chat_url"]) || firstString(root, ["live_chat_url"]);
+  const instagramHandle = firstString(contact, INSTAGRAM_KEYS, customFields);
+  const instagramProfileUrl = buildInstagramProfileUrl(instagramHandle);
+  const profilePic =
+    asString(contact.profile_pic) || asString(root.profile_pic) || undefined;
 
   const identities: ContactIdentityInput[] = [];
   pushIdentity(identities, {
     channel: "manychat",
     externalId: externalContactId,
+    profileUrl: liveChatUrl || undefined,
+    replyUrl: liveChatUrl || undefined,
+    avatarUrl: profilePic,
   });
   pushIdentity(identities, {
     channel: "phone",
@@ -476,7 +502,10 @@ export function parseManychatPayload(payload: unknown): ManychatContactDraft {
   });
   pushIdentity(identities, {
     channel: "instagram",
-    handle: firstString(contact, INSTAGRAM_KEYS, customFields),
+    externalId: firstString(contact, INSTAGRAM_ID_KEYS, customFields),
+    handle: instagramHandle,
+    profileUrl: instagramProfileUrl,
+    avatarUrl: profilePic,
   });
   pushIdentity(identities, {
     channel: "whatsapp",
@@ -565,7 +594,10 @@ export function parseManychatPayload(payload: unknown): ManychatContactDraft {
       subscribed_at: asString(contact.subscribed) || asString(root.subscribed) || undefined,
       last_growth_tool:
         asString(contact.last_growth_tool) || asString(root.last_growth_tool) || undefined,
-      live_chat_url: asString(contact.live_chat_url) || asString(root.live_chat_url) || undefined,
+      live_chat_url: liveChatUrl || undefined,
+      instagram_username: instagramHandle || undefined,
+      instagram_profile_url: instagramProfileUrl,
+      profile_pic: profilePic,
       contact,
       custom_fields: customFields,
     },

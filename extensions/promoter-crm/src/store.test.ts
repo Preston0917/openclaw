@@ -356,7 +356,13 @@ describe("promoter CRM store", () => {
     expect(result.status.tableCounts.ingest_jobs).toBe(2);
 
     const contact = result.contact?.contact as { displayName: string; city: string | null };
-    const identities = result.contact?.identities as Array<{ channel: string }>;
+    const identities = result.contact?.identities as Array<{
+      channel: string;
+      handle?: string | null;
+      profile_url?: string | null;
+      reply_url?: string | null;
+      avatar_url?: string | null;
+    }>;
     const tags = result.contact?.tags as string[];
     const preferences = result.contact?.preferences as Array<{ category: string; value: string }>;
     const notes = result.contact?.notes as Array<{ body: string }>;
@@ -375,6 +381,14 @@ describe("promoter CRM store", () => {
       "manychat",
       "phone",
     ]);
+    expect(identities.find((entry) => entry.channel === "manychat")).toMatchObject({
+      profile_url: "https://manychat.com/livechat?user_ref=mc-501",
+      reply_url: "https://manychat.com/livechat?user_ref=mc-501",
+    });
+    expect(identities.find((entry) => entry.channel === "instagram")).toMatchObject({
+      handle: "ava.stone",
+      profile_url: "https://www.instagram.com/ava.stone/",
+    });
     expect(tags).toEqual(["birthday", "vip"]);
     expect(preferences).toEqual(
       expect.arrayContaining([

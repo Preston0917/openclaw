@@ -56,7 +56,19 @@ describe("promoter CRM tools", () => {
     withPromoterCrmStore({ stateDir }, (store) => {
       const natalie = store.upsertContact({
         displayName: "Natalie Radin",
-        identities: [{ channel: "manychat", externalId: "1266546411", isPrimary: true }],
+        identities: [
+          {
+            channel: "manychat",
+            externalId: "1266546411",
+            isPrimary: true,
+            replyUrl: "https://app.manychat.com/fb3160512/chat/1266546411",
+          },
+          {
+            channel: "instagram",
+            handle: "@natalie_radin",
+            profileUrl: "https://www.instagram.com/natalie_radin/",
+          },
+        ],
       });
       store.logInteraction({
         contactId: natalie.contactId,
@@ -74,7 +86,7 @@ describe("promoter CRM tools", () => {
     const result = await tool.execute?.("tool-1", {
       limit: 10,
       onlyNeedsReply: true,
-      sinceHours: 24,
+      sinceHours: 48,
     });
     const text = readTextContent(result);
 
@@ -83,6 +95,8 @@ describe("promoter CRM tools", () => {
     expect(text).toContain("Natalie Radin | channel=manychat | needsReply=yes");
     expect(text).toContain('lastMessage="18 gaf"');
     expect(text).toContain("primaryIdentity=manychat:1266546411");
+    expect(text).toContain("replyUrl=https://app.manychat.com/fb3160512/chat/1266546411");
+    expect(text).toContain("profileUrl=https://www.instagram.com/natalie_radin/");
   });
 
   it("renders grounded conversation threads directly in tool content", async () => {
@@ -91,7 +105,19 @@ describe("promoter CRM tools", () => {
       const preston = store.upsertContact({
         displayName: "Preston Choi",
         city: "New York",
-        identities: [{ channel: "manychat", externalId: "1629294916", isPrimary: true }],
+        identities: [
+          {
+            channel: "manychat",
+            externalId: "1629294916",
+            isPrimary: true,
+            replyUrl: "https://app.manychat.com/fb3160512/chat/1629294916",
+          },
+          {
+            channel: "instagram",
+            handle: "@pressed_in",
+            profileUrl: "https://www.instagram.com/pressed_in/",
+          },
+        ],
       });
 
       store.logInteraction({
@@ -130,6 +156,9 @@ describe("promoter CRM tools", () => {
     expect(text).toContain("Grounded promoter CRM conversation thread.");
     expect(text).toContain("Contact: Preston Choi | qualityTier=(none) | city=New York");
     expect(text).toContain("Conversation: channel=manychat | needsReply=yes");
+    expect(text).toContain(
+      "Links: replyUrl=https://app.manychat.com/fb3160512/chat/1629294916 | profileUrl=https://www.instagram.com/pressed_in/",
+    );
     expect(text).toContain('[2026-03-14T00:38:29.010Z] inbound "Yo bro what\'s up"');
     expect(text).toContain('[2026-03-14T01:07:20.200Z] inbound "You\'re actually a loser"');
     expect(text).toContain('[2026-03-14T01:07:20.200Z] reply "Second inbound DM."');

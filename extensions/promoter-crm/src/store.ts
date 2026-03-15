@@ -53,6 +53,9 @@ export type ContactIdentityInput = {
   handle?: string;
   email?: string;
   phoneE164?: string;
+  profileUrl?: string;
+  replyUrl?: string;
+  avatarUrl?: string;
   source?: string;
   isPrimary?: boolean;
   confidence?: number;
@@ -383,6 +386,14 @@ function maybeString(value: string | undefined): string | null {
   return trimmed ? trimmed : null;
 }
 
+function maybeUrl(value: string | undefined): string | null {
+  const trimmed = normalizeWhitespace(value);
+  if (!trimmed) {
+    return null;
+  }
+  return /^https?:\/\//i.test(trimmed) ? trimmed : null;
+}
+
 function maybeNumber(value: number | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -420,6 +431,32 @@ function parseJsonObject(value: string | null | undefined): Record<string, unkno
     return null;
   }
   return null;
+}
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function readMetadataText(
+  record: Record<string, unknown> | null,
+  keys: string[],
+): string | undefined {
+  if (!record) {
+    return undefined;
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+    if (typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+  }
+  return undefined;
 }
 
 function extractUrls(value: string | null | undefined): string[] {
@@ -463,6 +500,51 @@ function presentMessageContent(content: string | null | undefined): {
     preview: normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized,
     attachmentUrls: [],
   };
+}
+
+function buildInstagramProfileUrl(handle: string | undefined): string | null {
+  const normalizedHandle = normalizeHandle(handle);
+  return normalizedHandle ? `https://www.instagram.com/${normalizedHandle}/` : null;
+}
+
+function readIdentityChannel(value: unknown): IdentityChannel | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  return value as IdentityChannel;
+}
+
+function readIdentityUrl(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  return typeof value === "string" && /^https?:\/\//i.test(value.trim()) ? value.trim() : null;
+}
+
+function chooseConversationIdentity(
+  identities: Array<Record<string, unknown>>,
+  channel: IdentityChannel,
+): Record<string, unknown> | null {
+  const matches = identities.filter((identity) => readIdentityChannel(identity.channel) === channel);
+  return matches[0] ?? identities[0] ?? null;
+}
+
+function choosePreferredIdentityUrl(
+  identities: Array<Record<string, unknown>>,
+  channel: IdentityChannel,
+  key: "reply_url" | "profile_url",
+): string | null {
+  const matchingIdentity = chooseConversationIdentity(identities, channel);
+  const matchingValue = matchingIdentity ? readIdentityUrl(matchingIdentity, key) : null;
+  if (matchingValue) {
+    return matchingValue;
+  }
+
+  for (const identity of identities) {
+    const value = readIdentityUrl(identity, key);
+    if (value) {
+      return value;
+    }
+  }
+  return null;
 }
 
 function normalizeSegmentDefinition(input: SegmentDefinition | undefined): SegmentDefinition {
@@ -646,6 +728,7 @@ export class PromoterCrmStore {
     const { DatabaseSync } = requireNodeSqlite();
     this.db = new DatabaseSync(paths.dbPath);
     ensurePromoterCrmSchema(this.db);
+    this.backfillIdentityLinksFromInteractionMetadata();
   }
 
   close(): void {
@@ -753,6 +836,153 @@ export class PromoterCrmStore {
         WHERE ingest_job_id = ?
       `)
       .run(params.status, JSON.stringify(params.stats), nowIso(), params.ingestJobId);
+  }
+
+  private backfillIdentityLink(
+    contactId: string,
+    identity: ContactIdentityInput & { channel: IdentityChannel },
+  ): void {
+    const normalizedValue = normalizeIdentityValue(identity);
+    if (!normalizedValue) {
+      return;
+    }
+
+    const existing = this.db
+      .prepare(`
+        SELECT identity_id, is_primary
+        FROM contact_identities
+        WHERE channel = ? AND normalized_value = ?
+        LIMIT 1
+      `)
+      .get(identity.channel, normalizedValue) as
+      | { identity_id?: string; is_primary?: number }
+      | undefined;
+    const currentIdentityCount =
+      (
+        this.db
+          .prepare("SELECT COUNT(*) AS count FROM contact_identities WHERE contact_id = ?")
+          .get(contactId) as { count?: number } | undefined
+      )?.count ?? 0;
+    const identityId = existing?.identity_id ?? randomUUID();
+    const isPrimary = existing?.is_primary ?? (currentIdentityCount === 0 ? 1 : 0);
+    const now = nowIso();
+
+    this.db
+      .prepare(`
+        INSERT INTO contact_identities (
+          identity_id,
+          contact_id,
+          channel,
+          external_id,
+          handle,
+          email,
+          phone_e164,
+          profile_url,
+          reply_url,
+          avatar_url,
+          normalized_value,
+          source,
+          is_primary,
+          confidence,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(channel, normalized_value) DO UPDATE SET
+          contact_id = excluded.contact_id,
+          external_id = COALESCE(excluded.external_id, contact_identities.external_id),
+          handle = COALESCE(excluded.handle, contact_identities.handle),
+          email = COALESCE(excluded.email, contact_identities.email),
+          phone_e164 = COALESCE(excluded.phone_e164, contact_identities.phone_e164),
+          profile_url = COALESCE(contact_identities.profile_url, excluded.profile_url),
+          reply_url = COALESCE(contact_identities.reply_url, excluded.reply_url),
+          avatar_url = COALESCE(contact_identities.avatar_url, excluded.avatar_url),
+          source = COALESCE(excluded.source, contact_identities.source),
+          confidence = COALESCE(excluded.confidence, contact_identities.confidence),
+          updated_at = excluded.updated_at
+      `)
+      .run(
+        identityId,
+        contactId,
+        identity.channel,
+        maybeString(identity.externalId),
+        maybeString(normalizeHandle(identity.handle)),
+        maybeString(normalizeEmail(identity.email)),
+        maybeString(normalizePhone(identity.phoneE164)),
+        maybeUrl(identity.profileUrl),
+        maybeUrl(identity.replyUrl),
+        maybeUrl(identity.avatarUrl),
+        normalizedValue,
+        maybeString(identity.source),
+        isPrimary,
+        typeof identity.confidence === "number" ? identity.confidence : 1,
+        now,
+        now,
+      );
+  }
+
+  private backfillIdentityLinksFromInteractionMetadata(): void {
+    const rows = this.db
+      .prepare(`
+        SELECT contact_id, metadata_json
+        FROM interaction_history
+        WHERE metadata_json IS NOT NULL
+        ORDER BY occurred_at DESC
+      `)
+      .all() as Array<{ contact_id?: string; metadata_json?: string }>;
+    const processed = new Set<string>();
+
+    for (const row of rows) {
+      const contactId = maybeString(row.contact_id);
+      if (!contactId || processed.has(contactId)) {
+        continue;
+      }
+      processed.add(contactId);
+
+      const metadata = parseJsonObject(row.metadata_json);
+      if (!metadata) {
+        continue;
+      }
+      const contact = asObject(metadata.contact);
+      const liveChatUrl =
+        readMetadataText(metadata, ["live_chat_url"]) ||
+        readMetadataText(contact, ["live_chat_url"]);
+      const profilePic =
+        readMetadataText(metadata, ["profile_pic"]) || readMetadataText(contact, ["profile_pic"]);
+      const manychatContactId =
+        readMetadataText(metadata, ["manychat_contact_id"]) || readMetadataText(contact, ["id"]);
+      const instagramHandle =
+        readMetadataText(metadata, ["instagram_username"]) ||
+        readMetadataText(contact, ["ig_username", "instagram_username"]);
+      const instagramId =
+        readMetadataText(contact, ["ig_id", "instagram_id"]) ||
+        readMetadataText(metadata, ["instagram_id"]);
+      const instagramProfileUrl =
+        readMetadataText(metadata, ["instagram_profile_url"]) ||
+        buildInstagramProfileUrl(instagramHandle) ||
+        undefined;
+
+      if (manychatContactId || liveChatUrl || profilePic) {
+        this.backfillIdentityLink(contactId, {
+          channel: "manychat",
+          externalId: manychatContactId,
+          profileUrl: liveChatUrl,
+          replyUrl: liveChatUrl,
+          avatarUrl: profilePic,
+          source: "manychat",
+        });
+      }
+
+      if (instagramHandle || instagramId || instagramProfileUrl || profilePic) {
+        this.backfillIdentityLink(contactId, {
+          channel: "instagram",
+          externalId: instagramId,
+          handle: instagramHandle,
+          profileUrl: instagramProfileUrl,
+          avatarUrl: profilePic,
+          source: "manychat",
+        });
+      }
+    }
   }
 
   private withTransaction<T>(fn: () => T): T {
@@ -892,19 +1122,25 @@ export class PromoterCrmStore {
         handle,
         email,
         phone_e164,
+        profile_url,
+        reply_url,
+        avatar_url,
         normalized_value,
         source,
         is_primary,
         confidence,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(channel, normalized_value) DO UPDATE SET
         contact_id = excluded.contact_id,
         external_id = excluded.external_id,
         handle = excluded.handle,
         email = excluded.email,
         phone_e164 = excluded.phone_e164,
+        profile_url = COALESCE(excluded.profile_url, contact_identities.profile_url),
+        reply_url = COALESCE(excluded.reply_url, contact_identities.reply_url),
+        avatar_url = COALESCE(excluded.avatar_url, contact_identities.avatar_url),
         source = excluded.source,
         is_primary = excluded.is_primary,
         confidence = excluded.confidence,
@@ -923,6 +1159,9 @@ export class PromoterCrmStore {
         maybeString(normalizeHandle(identity.handle)),
         maybeString(normalizeEmail(identity.email)),
         maybeString(normalizePhone(identity.phoneE164)),
+        maybeUrl(identity.profileUrl),
+        maybeUrl(identity.replyUrl),
+        maybeUrl(identity.avatarUrl),
         normalizedValue,
         maybeString(identity.source),
         identity.isPrimary ? 1 : 0,
@@ -2564,6 +2803,9 @@ export class PromoterCrmStore {
           handle,
           email,
           phone_e164,
+          profile_url,
+          reply_url,
+          avatar_url,
           source,
           is_primary,
           confidence,
@@ -2810,6 +3052,8 @@ export class PromoterCrmStore {
           : null,
         tags: this.listContactTags(row.contact_id),
         primaryIdentity: identities[0] ?? null,
+        replyUrl: choosePreferredIdentityUrl(identities, row.channel, "reply_url"),
+        profileUrl: choosePreferredIdentityUrl(identities, row.channel, "profile_url"),
         openFollowupTasks,
       };
     });
@@ -2974,6 +3218,8 @@ export class PromoterCrmStore {
               sentAt: conversationRow.last_inbound_at,
             }
           : null,
+        replyUrl: choosePreferredIdentityUrl(identities, conversationRow.channel, "reply_url"),
+        profileUrl: choosePreferredIdentityUrl(identities, conversationRow.channel, "profile_url"),
       },
       messages,
       interactions,

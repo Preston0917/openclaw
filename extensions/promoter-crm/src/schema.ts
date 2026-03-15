@@ -23,6 +23,24 @@ export const PROMOTER_CRM_TABLES = [
   "ingest_job_items",
 ] as const;
 
+function hasColumn(db: DatabaseSync, table: string, column: string): boolean {
+  const rows = db
+    .prepare(`PRAGMA table_info(${table})`)
+    .all() as Array<{ name?: string }>;
+  return rows.some((row) => row.name === column);
+}
+
+function ensureColumn(
+  db: DatabaseSync,
+  table: string,
+  column: string,
+  definition: string,
+): void {
+  if (!hasColumn(db, table, column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+  }
+}
+
 export function ensurePromoterCrmSchema(db: DatabaseSync): void {
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec("PRAGMA journal_mode = WAL;");
@@ -52,6 +70,9 @@ export function ensurePromoterCrmSchema(db: DatabaseSync): void {
       handle TEXT,
       email TEXT,
       phone_e164 TEXT,
+      profile_url TEXT,
+      reply_url TEXT,
+      avatar_url TEXT,
       normalized_value TEXT NOT NULL,
       source TEXT,
       is_primary INTEGER NOT NULL DEFAULT 0,
@@ -65,6 +86,9 @@ export function ensurePromoterCrmSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_contact_identities_contact
     ON contact_identities(contact_id);
   `);
+  ensureColumn(db, "contact_identities", "profile_url", "TEXT");
+  ensureColumn(db, "contact_identities", "reply_url", "TEXT");
+  ensureColumn(db, "contact_identities", "avatar_url", "TEXT");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS contact_merges (
