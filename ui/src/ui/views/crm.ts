@@ -3,6 +3,7 @@ import { formatRelativeTimestamp } from "../format.ts";
 import type {
   CrmChannelFilter,
   CrmConversationThread,
+  CrmInboxTab,
   CrmInboxItem,
 } from "../controllers/crm.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
@@ -17,7 +18,7 @@ type CrmProps = {
   thread: CrmConversationThread | null;
   selectedConversationId: string | null;
   channelFilter: CrmChannelFilter;
-  needsReplyOnly: boolean;
+  inboxTab: CrmInboxTab;
   searchQuery: string;
   composerText: string;
   sendBusy: boolean;
@@ -27,7 +28,7 @@ type CrmProps = {
   onRefresh: () => void;
   onSelectConversation: (conversationId: string) => void;
   onChannelFilterChange: (next: CrmChannelFilter) => void;
-  onNeedsReplyOnlyChange: (next: boolean) => void;
+  onInboxTabChange: (next: CrmInboxTab) => void;
   onSearchQueryChange: (next: string) => void;
   onComposerTextChange: (next: string) => void;
   onSendReply: () => void;
@@ -61,6 +62,59 @@ function stringifyValue(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+function looksNumericLabel(value: string): boolean {
+  const trimmed = value.trim();
+  return /^\d{6,}$/.test(trimmed);
+}
+
+function extractInstagramHandleFromUrl(value: string): string | null {
+  const match = value.match(/instagram\.com\/([^/?#]+)/i);
+  return match?.[1] ? `@${match[1]}` : null;
+}
+
+function formatLeadTitle(input: {
+  contactName?: string | null;
+  profileUrl?: string | null;
+}): string {
+  const contactName = stringifyValue(input.contactName).trim();
+  if (contactName && !looksNumericLabel(contactName)) {
+    return contactName;
+  }
+  const handle = extractInstagramHandleFromUrl(stringifyValue(input.profileUrl));
+  if (handle) {
+    return handle;
+  }
+  return contactName || "Unknown lead";
+}
+
+function formatLeadSecondary(input: {
+  contactName?: string | null;
+  profileUrl?: string | null;
+  channelLabel?: string | null;
+}): string | null {
+  const contactName = stringifyValue(input.contactName).trim();
+  if (contactName && looksNumericLabel(contactName)) {
+    return `${stringifyValue(input.channelLabel) || "lead"} · id ${contactName}`;
+  }
+  const handle = extractInstagramHandleFromUrl(stringifyValue(input.profileUrl));
+  if (handle && handle !== contactName) {
+    return `${stringifyValue(input.channelLabel) || "lead"} · ${handle}`;
+  }
+  return stringifyValue(input.channelLabel) || null;
+}
+
+function leadInitials(label: string): string {
+  const cleaned = label.replace(/^@/, "").trim();
+  if (!cleaned) {
+    return "?";
+  }
+  const parts = cleaned.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) {
+    return parts[0]!.slice(0, 2).toUpperCase();
+  }
+  return `${parts[0]![0] ?? ""}${parts[1]![0] ?? ""}`.toUpperCase();
+}
+
 function formatMessageBody(message: Record<string, unknown>): string {
   const preview = stringifyValue(message.preview);
   if (preview) {
@@ -75,6 +129,15 @@ function renderInboxItem(
   selectedConversationId: string | null,
   onSelectConversation: (conversationId: string) => void,
 ) {
+  const displayTitle = formatLeadTitle({
+    contactName: item.contactName,
+    profileUrl: item.profileUrl,
+  });
+  const displaySecondary = formatLeadSecondary({
+    contactName: item.contactName,
+    profileUrl: item.profileUrl,
+    channelLabel: item.channelLabel,
+  });
   const preview = item.lastMessage?.preview ?? "No messages yet.";
   const relative = formatRelativeTime(item.lastActivityAt ?? item.lastMessage?.sentAt);
   const when = formatAbsoluteTime(item.lastActivityAt ?? item.lastMessage?.sentAt);
@@ -87,14 +150,14 @@ function renderInboxItem(
         : ""}"
       @click=${() => onSelectConversation(item.conversationId)}
     >
+      <div class="crm-inbox-item__avatar">${leadInitials(displayTitle)}</div>
       <div class="list-main">
         <div class="crm-inbox-item__title-row">
-          <div class="list-title">${item.contactName}</div>
+          <div class="list-title">${displayTitle}</div>
           ${item.needsReply ? html`<span class="crm-pill crm-pill--urgent">Needs reply</span>` : nothing}
         </div>
-        <div class="list-sub">
-          ${(item.channelLabel ?? item.channel ?? "unknown").toString()} · ${preview}
-        </div>
+        ${displaySecondary ? html`<div class="list-sub">${displaySecondary}</div>` : nothing}
+        <div class="crm-inbox-item__preview">${preview}</div>
         ${
           Array.isArray(item.tags) && item.tags.length > 0
             ? html`
@@ -120,6 +183,15 @@ function renderThreadHeader(thread: CrmConversationThread) {
   const contact = thread.contact as Record<string, unknown>;
   const conversation = thread.conversation as Record<string, unknown>;
   const latestScore = thread.latestScore as Record<string, unknown> | null;
+  const title = formatLeadTitle({
+    contactName: stringifyValue(contact.displayName) || stringifyValue(contact.contactId),
+    profileUrl: stringifyValue(conversation.profileUrl),
+  });
+  const secondary = formatLeadSecondary({
+    contactName: stringifyValue(contact.displayName) || stringifyValue(contact.contactId),
+    profileUrl: stringifyValue(conversation.profileUrl),
+    channelLabel: stringifyValue(conversation.channelLabel) || stringifyValue(conversation.channel),
+  });
   const qualityTier = stringifyValue(contact.qualityTier) || "—";
   const score =
     latestScore && typeof latestScore.overall_score === "number"
@@ -129,12 +201,16 @@ function renderThreadHeader(thread: CrmConversationThread) {
   const profileUrl = stringifyValue(conversation.profileUrl);
   return html`
     <div class="crm-thread__header">
-      <div>
-        <div class="card-title">${stringifyValue(contact.displayName) || stringifyValue(contact.contactId)}</div>
-        <div class="card-sub">
-          ${(stringifyValue(conversation.channelLabel) || stringifyValue(conversation.channel) || "unknown").toString()}
-          · quality ${qualityTier}
-          · score ${score}
+      <div class="crm-thread__identity">
+        <div class="crm-thread__avatar">${leadInitials(title)}</div>
+        <div>
+          <div class="card-title">${title}</div>
+          <div class="card-sub">
+            ${secondary ?? "lead"}
+            · quality ${qualityTier}
+            · score ${score}
+          </div>
+          <div class="crm-thread__meta-line">Updated ${formatRelativeTime(conversation.lastActivityAt)}</div>
         </div>
       </div>
       <div class="crm-thread__header-links">
@@ -175,37 +251,39 @@ function renderMessage(message: Record<string, unknown>) {
     ? message.attachmentUrls.filter((entry): entry is string => typeof entry === "string")
     : [];
   return html`
-    <div class="crm-message crm-message--${direction === "outbound" ? "outbound" : "inbound"}">
-      <div class="crm-message__meta">
-        <span class="crm-pill">${direction || "message"}</span>
-        <span>${sentAt}</span>
+    <div class="crm-message-row crm-message-row--${direction === "outbound" ? "outbound" : "inbound"}">
+      <div class="crm-message crm-message--${direction === "outbound" ? "outbound" : "inbound"}">
+        <div class="crm-message__meta">
+          <span>${direction === "outbound" ? "You" : "Lead"}</span>
+          <span>${sentAt}</span>
+        </div>
+        <div class="crm-message__body">${preview}</div>
+        ${
+          attachmentUrls.length > 0
+            ? html`
+                <div class="crm-message__attachments">
+                  ${attachmentUrls.map(
+                    (url) => html`
+                      <a
+                        class="session-link"
+                        href=${url}
+                        target=${EXTERNAL_LINK_TARGET}
+                        rel=${buildExternalLinkRel()}
+                      >Attachment</a>
+                    `,
+                  )}
+                </div>
+              `
+            : nothing
+        }
       </div>
-      <div class="crm-message__body">${preview}</div>
-      ${
-        attachmentUrls.length > 0
-          ? html`
-              <div class="crm-message__attachments">
-                ${attachmentUrls.map(
-                  (url) => html`
-                    <a
-                      class="session-link"
-                      href=${url}
-                      target=${EXTERNAL_LINK_TARGET}
-                      rel=${buildExternalLinkRel()}
-                    >Attachment</a>
-                  `,
-                )}
-              </div>
-            `
-          : nothing
-      }
     </div>
   `;
 }
 
 export function renderCrm(props: CrmProps) {
   const needle = props.searchQuery.trim().toLowerCase();
-  const filteredItems = props.inboxItems.filter((item) => {
+  const allItems = props.inboxItems.filter((item) => {
     if (!needle) {
       return true;
     }
@@ -215,6 +293,10 @@ export function renderCrm(props: CrmProps) {
       .toLowerCase();
     return haystack.includes(needle);
   });
+  const visibleItems =
+    props.inboxTab === "needs-replies" ? allItems.filter((item) => item.needsReply) : allItems;
+  const needsReplyCount = props.inboxItems.filter((item) => item.needsReply).length;
+  const allCount = props.inboxItems.length;
   const conversation = props.thread?.conversation as Record<string, unknown> | undefined;
   const canSend = stringifyValue(conversation?.channel) === "manychat";
   const needsReply = conversation?.needsReply === true;
@@ -228,17 +310,41 @@ export function renderCrm(props: CrmProps) {
         <div class="crm-panel__header">
           <div>
             <div class="card-title">Lead Inbox</div>
-            <div class="card-sub">
-              Instagram is routed through ManyChat for now, but the ledger stays channel-ready for future transports.
-            </div>
+            <div class="card-sub">Click a lead to open the live thread and reply in place.</div>
           </div>
           <button class="btn" ?disabled=${props.inboxLoading} @click=${props.onRefresh}>
             ${props.inboxLoading ? "Refreshing…" : "Refresh"}
           </button>
         </div>
 
+        <div class="crm-tabs">
+          <button
+            class="crm-tab ${props.inboxTab === "needs-replies" ? "crm-tab--active" : ""}"
+            @click=${() => props.onInboxTabChange("needs-replies")}
+          >
+            Needs replies
+            <span class="crm-tab__count">${needsReplyCount}</span>
+          </button>
+          <button
+            class="crm-tab ${props.inboxTab === "all" ? "crm-tab--active" : ""}"
+            @click=${() => props.onInboxTabChange("all")}
+          >
+            All conversations
+            <span class="crm-tab__count">${allCount}</span>
+          </button>
+        </div>
+
         <div class="crm-toolbar">
-          <label class="field">
+          <label class="field crm-toolbar__search">
+            <span>Search leads</span>
+            <input
+              .value=${props.searchQuery}
+              @input=${(event: Event) =>
+                props.onSearchQueryChange((event.target as HTMLInputElement).value)}
+              placeholder="Amanda, table, Friday..."
+            />
+          </label>
+          <label class="field crm-toolbar__channel">
             <span>Channel</span>
             <select
               .value=${props.channelFilter}
@@ -252,24 +358,6 @@ export function renderCrm(props: CrmProps) {
               <option value="all">All</option>
             </select>
           </label>
-          <label class="field">
-            <span>Search</span>
-            <input
-              .value=${props.searchQuery}
-              @input=${(event: Event) =>
-                props.onSearchQueryChange((event.target as HTMLInputElement).value)}
-              placeholder="Name or last message"
-            />
-          </label>
-          <label class="field checkbox">
-            <span>Needs reply only</span>
-            <input
-              type="checkbox"
-              .checked=${props.needsReplyOnly}
-              @change=${(event: Event) =>
-                props.onNeedsReplyOnlyChange((event.target as HTMLInputElement).checked)}
-            />
-          </label>
         </div>
 
         ${
@@ -281,9 +369,9 @@ export function renderCrm(props: CrmProps) {
 
         <div class="list crm-inbox-list">
           ${
-            filteredItems.length === 0
+            visibleItems.length === 0
               ? html`<div class="muted">No conversations match this filter.</div>`
-              : filteredItems.map((item) =>
+              : visibleItems.map((item) =>
                   renderInboxItem(item, props.selectedConversationId, props.onSelectConversation),
                 )
           }
@@ -309,7 +397,7 @@ export function renderCrm(props: CrmProps) {
                 ${props.actionError ? html`<div class="callout danger">${props.actionError}</div>` : nothing}
                 ${props.threadError ? html`<div class="callout danger">${props.threadError}</div>` : nothing}
 
-                <div class="crm-thread">
+                <div class="crm-thread crm-chat__messages">
                   ${
                     props.threadLoading
                       ? html`<div class="muted">Loading thread…</div>`
@@ -320,41 +408,39 @@ export function renderCrm(props: CrmProps) {
                 </div>
 
                 <div class="crm-composer">
-                  <label class="field">
-                    <span>Reply</span>
-                    <textarea
-                      rows="4"
-                      .value=${props.composerText}
-                      @input=${(event: Event) =>
-                        props.onComposerTextChange((event.target as HTMLTextAreaElement).value)}
-                      placeholder="Type the reply you want to send or log…"
-                    ></textarea>
-                  </label>
+                  <textarea
+                    class="crm-composer__input"
+                    rows="3"
+                    .value=${props.composerText}
+                    @input=${(event: Event) =>
+                      props.onComposerTextChange((event.target as HTMLTextAreaElement).value)}
+                    placeholder="Message this lead..."
+                  ></textarea>
                   <div class="crm-composer__actions">
                     <button
                       class="btn btn--primary"
                       ?disabled=${!canSend || !props.composerText.trim() || props.sendBusy}
                       @click=${props.onSendReply}
                     >
-                      ${props.sendBusy ? "Sending…" : "Send via ManyChat"}
+                      ${props.sendBusy ? "Sending…" : "Send"}
                     </button>
+                    <button class="btn" @click=${props.onDraftInChat}>Draft in Chat</button>
                     <button
-                      class="btn"
+                      class="btn crm-composer__secondary"
                       ?disabled=${!props.composerText.trim() || props.logBusy}
                       @click=${props.onLogReply}
                     >
-                      ${props.logBusy ? "Logging…" : "Log manual reply"}
+                      ${props.logBusy ? "Logging…" : "Record manual"}
                     </button>
-                    <button class="btn" @click=${props.onDraftInChat}>Draft in Chat</button>
                   </div>
                   <div class="crm-composer__hint">
-                    Send when you want OpenClaw to deliver the message through ManyChat. Log manual reply when you answered elsewhere and still want the CRM summary ledger to stay complete.
+                    Send replies here for full tracking. Record manual is just a fallback when you answered outside OpenClaw.
                   </div>
                   ${
                     !canSend
                       ? html`
                           <div class="crm-composer__hint">
-                            Direct send is only enabled for ManyChat-backed threads right now. The ledger is still shared so WhatsApp and iMessage can plug into the same panel later.
+                            Direct send is only enabled for ManyChat-backed threads right now. The same ledger can back WhatsApp and iMessage later.
                           </div>
                         `
                       : nothing

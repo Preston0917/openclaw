@@ -7,6 +7,7 @@ import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exe
 import type {
   CrmChannelFilter,
   CrmConversationThread,
+  CrmInboxTab,
   CrmInboxItem,
 } from "./controllers/crm.ts";
 import type { SkillMessage } from "./controllers/skills.ts";
@@ -304,7 +305,7 @@ export type AppViewState = {
     crmThread: CrmConversationThread | null;
     crmSelectedConversationId: string | null;
     crmChannelFilter: CrmChannelFilter;
-    crmNeedsReplyOnly: boolean;
+    crmInboxTab: CrmInboxTab;
     crmSearchQuery: string;
     crmComposerText: string;
     crmSendBusy: boolean;

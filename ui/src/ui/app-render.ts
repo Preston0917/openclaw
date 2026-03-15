@@ -679,7 +679,7 @@ export function renderApp(state: AppViewState) {
                   thread: state.crmThread,
                   selectedConversationId: state.crmSelectedConversationId,
                   channelFilter: state.crmChannelFilter,
-                  needsReplyOnly: state.crmNeedsReplyOnly,
+                  inboxTab: state.crmInboxTab,
                   searchQuery: state.crmSearchQuery,
                   composerText: state.crmComposerText,
                   sendBusy: state.crmSendBusy,
@@ -697,9 +697,8 @@ export function renderApp(state: AppViewState) {
                     state.crmActionMessage = null;
                     void loadCrmInbox(state);
                   },
-                  onNeedsReplyOnlyChange: (next) => {
-                    state.crmNeedsReplyOnly = next;
-                    void loadCrmInbox(state);
+                  onInboxTabChange: (next) => {
+                    state.crmInboxTab = next;
                   },
                   onSearchQueryChange: (next) => {
                     state.crmSearchQuery = next;

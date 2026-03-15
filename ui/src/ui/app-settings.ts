@@ -1,7 +1,9 @@
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import { refreshChat } from "./app-chat.ts";
 import {
+  startCrmPolling,
   startLogsPolling,
+  stopCrmPolling,
   stopLogsPolling,
   startDebugPolling,
   stopDebugPolling,
@@ -409,6 +411,11 @@ function applyTabSelection(
     startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
   } else {
     stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
+  }
+  if (next === "crm") {
+    startCrmPolling(host as unknown as Parameters<typeof startCrmPolling>[0]);
+  } else {
+    stopCrmPolling(host as unknown as Parameters<typeof stopCrmPolling>[0]);
   }
   if (next === "debug") {
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);

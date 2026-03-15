@@ -58,6 +58,7 @@ type SettingsHost = {
   themeMedia: MediaQueryList | null;
   themeMediaHandler: ((event: MediaQueryListEvent) => void) | null;
   logsPollInterval: number | null;
+  crmPollInterval: number | null;
   debugPollInterval: number | null;
 };
 
@@ -115,6 +116,7 @@ const createHost = (tab: Tab): SettingsHost => ({
   themeMedia: null,
   themeMediaHandler: null,
   logsPollInterval: null,
+  crmPollInterval: null,
   debugPollInterval: null,
 });
 

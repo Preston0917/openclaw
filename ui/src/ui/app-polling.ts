@@ -1,4 +1,5 @@
 import type { OpenClawApp } from "./app.ts";
+import { loadCrmInbox } from "./controllers/crm.ts";
 import { loadDebug } from "./controllers/debug.ts";
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
@@ -7,6 +8,7 @@ type PollingHost = {
   nodesPollInterval: number | null;
   logsPollInterval: number | null;
   debugPollInterval: number | null;
+  crmPollInterval: number | null;
   tab: string;
 };
 
@@ -66,4 +68,24 @@ export function stopDebugPolling(host: PollingHost) {
   }
   clearInterval(host.debugPollInterval);
   host.debugPollInterval = null;
+}
+
+export function startCrmPolling(host: PollingHost) {
+  if (host.crmPollInterval != null) {
+    return;
+  }
+  host.crmPollInterval = window.setInterval(() => {
+    if (host.tab !== "crm") {
+      return;
+    }
+    void loadCrmInbox(host as unknown as OpenClawApp);
+  }, 4000);
+}
+
+export function stopCrmPolling(host: PollingHost) {
+  if (host.crmPollInterval == null) {
+    return;
+  }
+  clearInterval(host.crmPollInterval);
+  host.crmPollInterval = null;
 }

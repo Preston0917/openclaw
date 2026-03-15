@@ -1,6 +1,7 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
 
 export type CrmChannelFilter = "all" | "instagram" | "manychat" | "imessage" | "whatsapp";
+export type CrmInboxTab = "needs-replies" | "all";
 
 export type CrmInboxItem = {
   conversationId: string;
@@ -62,7 +63,7 @@ export type CrmState = {
   crmThread: CrmConversationThread | null;
   crmSelectedConversationId: string | null;
   crmChannelFilter: CrmChannelFilter;
-  crmNeedsReplyOnly: boolean;
+  crmInboxTab: CrmInboxTab;
   crmSearchQuery: string;
   crmComposerText: string;
   crmSendBusy: boolean;
@@ -103,7 +104,6 @@ export async function loadCrmInbox(
   try {
     const result = await state.client.request<CrmInboxSnapshot>("promoter-crm.inbox.list", {
       channel: effectiveChannel(state.crmChannelFilter),
-      onlyNeedsReply: state.crmNeedsReplyOnly,
       limit: 100,
     });
     const items = Array.isArray(result?.conversations) ? result.conversations : [];

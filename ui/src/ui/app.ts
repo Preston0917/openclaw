@@ -58,6 +58,7 @@ import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./contro
 import type {
   CrmChannelFilter,
   CrmConversationThread,
+  CrmInboxTab,
   CrmInboxItem,
 } from "./controllers/crm.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
@@ -441,7 +442,7 @@ export class OpenClawApp extends LitElement {
   @state() crmThread: CrmConversationThread | null = null;
   @state() crmSelectedConversationId: string | null = null;
   @state() crmChannelFilter: CrmChannelFilter = "instagram";
-  @state() crmNeedsReplyOnly = true;
+  @state() crmInboxTab: CrmInboxTab = "needs-replies";
   @state() crmSearchQuery = "";
   @state() crmComposerText = "";
   @state() crmSendBusy = false;
@@ -458,6 +459,7 @@ export class OpenClawApp extends LitElement {
   private nodesPollInterval: number | null = null;
   private logsPollInterval: number | null = null;
   private debugPollInterval: number | null = null;
+  private crmPollInterval: number | null = null;
   private logsScrollFrame: number | null = null;
   private toolStreamById = new Map<string, ToolStreamEntry>();
   private toolStreamOrder: string[] = [];
