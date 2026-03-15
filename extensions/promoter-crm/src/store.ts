@@ -491,8 +491,7 @@ function presentMessageContent(content: string | null | undefined): {
   if (isStandaloneUrl) {
     const url = urls[0]!;
     const isInstagramAttachment =
-      url.includes("lookaside.fbsbx.com/ig_messaging_cdn") ||
-      url.includes("instagram.com");
+      url.includes("lookaside.fbsbx.com/ig_messaging_cdn") || url.includes("instagram.com");
     return {
       contentType: isInstagramAttachment ? "attachment" : "link",
       preview: isInstagramAttachment ? "Instagram media attachment" : url,
@@ -528,7 +527,9 @@ function chooseConversationIdentity(
   identities: Array<Record<string, unknown>>,
   channel: IdentityChannel,
 ): Record<string, unknown> | null {
-  const matches = identities.filter((identity) => readIdentityChannel(identity.channel) === channel);
+  const matches = identities.filter(
+    (identity) => readIdentityChannel(identity.channel) === channel,
+  );
   return matches[0] ?? identities[0] ?? null;
 }
 
@@ -559,6 +560,56 @@ function chooseChannelIdentityUrl(
 ): string | null {
   const identity = identities.find((entry) => readIdentityChannel(entry.channel) === channel);
   return identity ? readIdentityUrl(identity, key) : null;
+}
+
+function contactHasIdentityChannel(
+  identities: Array<Record<string, unknown>>,
+  channel: IdentityChannel,
+): boolean {
+  return identities.some((entry) => readIdentityChannel(entry.channel) === channel);
+}
+
+function describeConversationChannelContext(
+  identities: Array<Record<string, unknown>>,
+  transportChannel: IdentityChannel,
+  requestedChannel?: IdentityChannel,
+): {
+  matchedChannel: IdentityChannel;
+  channelLabel: string;
+  primaryIdentity: Record<string, unknown> | null;
+  replyUrl: string | null;
+  profileUrl: string | null;
+} {
+  const requested = requestedChannel ? readIdentityChannel(requestedChannel) : null;
+  const transport = readIdentityChannel(transportChannel);
+  const instagramViaManychat =
+    requested === "instagram" &&
+    transport === "manychat" &&
+    contactHasIdentityChannel(identities, "instagram");
+
+  if (instagramViaManychat) {
+    return {
+      matchedChannel: "instagram",
+      channelLabel: "instagram via manychat",
+      primaryIdentity: chooseConversationIdentity(identities, "instagram"),
+      replyUrl:
+        chooseChannelIdentityUrl(identities, "manychat", "reply_url") ??
+        choosePreferredIdentityUrl(identities, "manychat", "reply_url"),
+      profileUrl:
+        chooseChannelIdentityUrl(identities, "instagram", "profile_url") ??
+        chooseChannelIdentityUrl(identities, "instagram", "reply_url") ??
+        choosePreferredIdentityUrl(identities, "manychat", "profile_url"),
+    };
+  }
+
+  const preferredChannel = requested ?? transport;
+  return {
+    matchedChannel: preferredChannel,
+    channelLabel: transport,
+    primaryIdentity: chooseConversationIdentity(identities, preferredChannel),
+    replyUrl: choosePreferredIdentityUrl(identities, transport, "reply_url"),
+    profileUrl: choosePreferredIdentityUrl(identities, preferredChannel, "profile_url"),
+  };
 }
 
 function normalizeSegmentDefinition(input: SegmentDefinition | undefined): SegmentDefinition {
@@ -1007,12 +1058,7 @@ export class PromoterCrmStore {
         });
       }
 
-      if (
-        data.instagramHandle ||
-        data.instagramId ||
-        data.instagramProfileUrl ||
-        data.profilePic
-      ) {
+      if (data.instagramHandle || data.instagramId || data.instagramProfileUrl || data.profilePic) {
         this.backfillIdentityLink(contactId, {
           channel: "instagram",
           externalId: data.instagramId,
@@ -2883,10 +2929,7 @@ export class PromoterCrmStore {
     return rows;
   }
 
-  private listOpenFollowupTasks(
-    contactId: string,
-    limit = 3,
-  ): Array<Record<string, unknown>> {
+  private listOpenFollowupTasks(contactId: string, limit = 3): Array<Record<string, unknown>> {
     const effectiveLimit = Math.max(1, Math.min(limit, 25));
     return this.db
       .prepare(`
@@ -2926,8 +2969,24 @@ export class PromoterCrmStore {
       filters.push("ci.contact_id = ?");
       params.push(input.contactId);
       if (input.channel) {
-        filters.push("ci.channel = ?");
-        params.push(input.channel);
+        if (input.channel === "instagram") {
+          filters.push(`(
+            ci.channel = ?
+            OR (
+              ci.channel = 'manychat'
+              AND EXISTS (
+                SELECT 1
+                FROM contact_identities ci2
+                WHERE ci2.contact_id = ci.contact_id
+                  AND ci2.channel = ?
+              )
+            )
+          )`);
+          params.push("instagram", "instagram");
+        } else {
+          filters.push("ci.channel = ?");
+          params.push(input.channel);
+        }
       }
     } else {
       throw new Error("Conversation lookup requires conversationId or contactId");
@@ -2985,8 +3044,24 @@ export class PromoterCrmStore {
     const params: Array<string | number> = [];
 
     if (input.channel) {
-      filters.push("ci.channel = ?");
-      params.push(input.channel);
+      if (input.channel === "instagram") {
+        filters.push(`(
+          ci.channel = ?
+          OR (
+            ci.channel = 'manychat'
+            AND EXISTS (
+              SELECT 1
+              FROM contact_identities ci2
+              WHERE ci2.contact_id = ci.contact_id
+                AND ci2.channel = ?
+            )
+          )
+        )`);
+        params.push("instagram", "instagram");
+      } else {
+        filters.push("ci.channel = ?");
+        params.push(input.channel);
+      }
     }
 
     if (input.onlyNeedsReply) {
@@ -2996,7 +3071,9 @@ export class PromoterCrmStore {
     if (typeof input.sinceHours === "number" && Number.isFinite(input.sinceHours)) {
       const boundedHours = Math.max(0, Math.min(input.sinceHours, 24 * 30));
       const threshold = new Date(Date.now() - boundedHours * 3_600_000).toISOString();
-      filters.push("COALESCE(ci.last_inbound_at, ci.last_message_sent_at, ci.last_message_at) >= ?");
+      filters.push(
+        "COALESCE(ci.last_inbound_at, ci.last_message_sent_at, ci.last_message_at) >= ?",
+      );
       params.push(threshold);
     }
 
@@ -3052,11 +3129,18 @@ export class PromoterCrmStore {
       const lastInboundMessage = presentMessageContent(row.last_inbound_content);
       const identities = this.listContactIdentities(row.contact_id);
       const openFollowupTasks = this.listOpenFollowupTasks(row.contact_id, 3);
+      const channelContext = describeConversationChannelContext(
+        identities,
+        row.channel,
+        input.channel,
+      );
       return {
         conversationId: row.conversation_id,
         contactId: row.contact_id,
         contactName: row.contact_name,
         channel: row.channel,
+        matchedChannel: channelContext.matchedChannel,
+        channelLabel: channelContext.channelLabel,
         externalThreadId: row.external_thread_id,
         status: row.conversation_status,
         qualityTier: row.quality_tier,
@@ -3091,9 +3175,9 @@ export class PromoterCrmStore {
             }
           : null,
         tags: this.listContactTags(row.contact_id),
-        primaryIdentity: identities[0] ?? null,
-        replyUrl: choosePreferredIdentityUrl(identities, row.channel, "reply_url"),
-        profileUrl: choosePreferredIdentityUrl(identities, row.channel, "profile_url"),
+        primaryIdentity: channelContext.primaryIdentity,
+        replyUrl: channelContext.replyUrl,
+        profileUrl: channelContext.profileUrl,
         openFollowupTasks,
       };
     });
@@ -3125,6 +3209,11 @@ export class PromoterCrmStore {
     const contact = this.getContactRow(conversationRow.contact_id);
     const latestScore = this.getLatestScore(conversationRow.contact_id);
     const identities = this.listContactIdentities(conversationRow.contact_id);
+    const channelContext = describeConversationChannelContext(
+      identities,
+      conversationRow.channel,
+      input.channel,
+    );
     const tags = this.listContactTags(conversationRow.contact_id);
     const followupTasks = this.listOpenFollowupTasks(conversationRow.contact_id, 10);
     const limit = Math.max(1, Math.min(input.limit ?? 50, 200));
@@ -3146,25 +3235,23 @@ export class PromoterCrmStore {
         LIMIT ?
       `)
       .all(conversationRow.conversation_id, limit) as ConversationMessageRow[];
-    const messages = [...messageRows]
-      .reverse()
-      .map((row) => {
-        const metadata = parseJsonObject(row.metadata_json);
-        const presentation = presentMessageContent(row.content);
-        return {
-          messageId: row.message_id,
-          externalMessageId: row.external_message_id,
-          direction: row.direction,
-          status: row.status,
-          content: row.content,
-          contentType: presentation.contentType,
-          preview: presentation.preview,
-          attachmentUrls: presentation.attachmentUrls,
-          sentAt: row.sent_at,
-          createdAt: row.created_at,
-          metadata,
-        };
-      });
+    const messages = [...messageRows].reverse().map((row) => {
+      const metadata = parseJsonObject(row.metadata_json);
+      const presentation = presentMessageContent(row.content);
+      return {
+        messageId: row.message_id,
+        externalMessageId: row.external_message_id,
+        direction: row.direction,
+        status: row.status,
+        content: row.content,
+        contentType: presentation.contentType,
+        preview: presentation.preview,
+        attachmentUrls: presentation.attachmentUrls,
+        sentAt: row.sent_at,
+        createdAt: row.created_at,
+        metadata,
+      };
+    });
 
     const interactions = this.db
       .prepare(`
@@ -3224,6 +3311,8 @@ export class PromoterCrmStore {
         conversationId: conversationRow.conversation_id,
         contactId: conversationRow.contact_id,
         channel: conversationRow.channel,
+        matchedChannel: channelContext.matchedChannel,
+        channelLabel: channelContext.channelLabel,
         externalThreadId: conversationRow.external_thread_id,
         status: conversationRow.conversation_status,
         startedAt: conversationRow.started_at,
@@ -3258,8 +3347,8 @@ export class PromoterCrmStore {
               sentAt: conversationRow.last_inbound_at,
             }
           : null,
-        replyUrl: choosePreferredIdentityUrl(identities, conversationRow.channel, "reply_url"),
-        profileUrl: choosePreferredIdentityUrl(identities, conversationRow.channel, "profile_url"),
+        replyUrl: channelContext.replyUrl,
+        profileUrl: channelContext.profileUrl,
       },
       messages,
       interactions,
@@ -3288,8 +3377,7 @@ export class PromoterCrmStore {
       limit: 1,
     });
     const identities = thread.identities;
-    const manychatIdentity =
-      identities.find((identity) => identity.channel === "manychat") ?? null;
+    const manychatIdentity = identities.find((identity) => identity.channel === "manychat") ?? null;
     if (!manychatIdentity) {
       throw new Error("No ManyChat identity is linked to this contact.");
     }
@@ -3311,11 +3399,9 @@ export class PromoterCrmStore {
       chooseChannelIdentityUrl(identities, "instagram", "reply_url");
     const conversation = thread.conversation as Record<string, unknown>;
     const contact = thread.contact as Record<string, unknown>;
-    const contactId =
-      typeof contact.contactId === "string" ? contact.contactId : "";
+    const contactId = typeof contact.contactId === "string" ? contact.contactId : "";
     const contactName =
-      (typeof contact.displayName === "string" && contact.displayName.trim()) ||
-      contactId;
+      (typeof contact.displayName === "string" && contact.displayName.trim()) || contactId;
     const conversationId =
       typeof conversation.conversationId === "string" ? conversation.conversationId : "";
     const externalThreadIdRaw =
@@ -3334,8 +3420,7 @@ export class PromoterCrmStore {
       externalThreadId: maybeString(externalThreadIdRaw) ?? null,
       subscriberId,
       replyUrl:
-        maybeString(replyUrlRaw) ??
-        choosePreferredIdentityUrl(identities, "manychat", "reply_url"),
+        maybeString(replyUrlRaw) ?? choosePreferredIdentityUrl(identities, "manychat", "reply_url"),
       profileUrl:
         maybeString(profileUrlRaw) ??
         choosePreferredIdentityUrl(identities, "manychat", "profile_url"),

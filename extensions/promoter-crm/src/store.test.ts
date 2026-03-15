@@ -414,6 +414,7 @@ describe("promoter CRM store", () => {
         last_name: "Bieber",
         name: "Marc Bieber",
         status: "ACTIVE",
+        live_chat_url: "https://app.manychat.com/fb3160512/chat/mc-900",
         ig_username: "marc.b",
         last_interaction: "2026-03-14T03:10:00.000Z",
         messages: [
@@ -448,6 +449,11 @@ describe("promoter CRM store", () => {
         limit: 10,
         onlyNeedsReply: true,
       });
+      const instagramInbox = store.getRecentInbox({
+        channel: "instagram",
+        limit: 10,
+        onlyNeedsReply: true,
+      });
       const thread = imported.contactId
         ? store.getConversationThread({
             contactId: imported.contactId,
@@ -455,8 +461,15 @@ describe("promoter CRM store", () => {
             limit: 10,
           })
         : null;
+      const instagramThread = imported.contactId
+        ? store.getConversationThread({
+            contactId: imported.contactId,
+            channel: "instagram",
+            limit: 10,
+          })
+        : null;
 
-      return { imported, inbox, thread };
+      return { imported, inbox, instagramInbox, thread, instagramThread };
     });
 
     const conversations = result.inbox.conversations as Array<{
@@ -466,6 +479,14 @@ describe("promoter CRM store", () => {
         contentType: string;
         preview: string;
       };
+    }>;
+    const instagramConversations = result.instagramInbox.conversations as Array<{
+      contactName: string;
+      matchedChannel: string;
+      channelLabel: string;
+      primaryIdentity: { channel: string; handle?: string };
+      replyUrl: string;
+      profileUrl: string;
     }>;
     const threadMessages = result.thread?.messages as Array<{
       direction: string;
@@ -477,6 +498,13 @@ describe("promoter CRM store", () => {
       channel: string;
       needsReply: boolean;
     };
+    const instagramThreadConversation = result.instagramThread?.conversation as {
+      channel: string;
+      matchedChannel: string;
+      channelLabel: string;
+      replyUrl: string;
+      profileUrl: string;
+    };
 
     expect(result.imported.stats.messagesImported).toBe(3);
     expect(conversations).toHaveLength(1);
@@ -484,8 +512,24 @@ describe("promoter CRM store", () => {
     expect(conversations[0]?.needsReply).toBe(true);
     expect(conversations[0]?.lastMessage.contentType).toBe("attachment");
     expect(conversations[0]?.lastMessage.preview).toBe("Instagram media attachment");
+    expect(instagramConversations).toHaveLength(1);
+    expect(instagramConversations[0]?.contactName).toBe("Marc Bieber");
+    expect(instagramConversations[0]?.matchedChannel).toBe("instagram");
+    expect(instagramConversations[0]?.channelLabel).toBe("instagram via manychat");
+    expect(instagramConversations[0]?.primaryIdentity.channel).toBe("instagram");
+    expect(instagramConversations[0]?.profileUrl).toBe("https://www.instagram.com/marc.b/");
+    expect(instagramConversations[0]?.replyUrl).toBe(
+      "https://app.manychat.com/fb3160512/chat/mc-900",
+    );
     expect(threadConversation?.channel).toBe("manychat");
     expect(threadConversation?.needsReply).toBe(true);
+    expect(instagramThreadConversation?.channel).toBe("manychat");
+    expect(instagramThreadConversation?.matchedChannel).toBe("instagram");
+    expect(instagramThreadConversation?.channelLabel).toBe("instagram via manychat");
+    expect(instagramThreadConversation?.profileUrl).toBe("https://www.instagram.com/marc.b/");
+    expect(instagramThreadConversation?.replyUrl).toBe(
+      "https://app.manychat.com/fb3160512/chat/mc-900",
+    );
     expect(threadMessages).toHaveLength(3);
     expect(threadMessages[2]?.direction).toBe("inbound");
     expect(threadMessages[2]?.contentType).toBe("attachment");

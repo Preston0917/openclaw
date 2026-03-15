@@ -1,6 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { Static, Type } from "@sinclair/typebox";
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { randomUUID } from "node:crypto";
 import { sendManychatText } from "./manychat-api.js";
 import {
   type PromoterCrmStore,
@@ -408,20 +408,19 @@ const SendManychatReplySchema = Type.Object(
     ),
     contactId: Type.Optional(
       Type.String({
-        description: "Fallback contact id when replying to the latest ManyChat thread for a contact.",
+        description:
+          "Fallback contact id when replying to the latest ManyChat thread for a contact.",
       }),
     ),
     text: Type.String({ description: "Plain-text reply to send through ManyChat." }),
     confirmSend: Type.Optional(
       Type.Boolean({
-        description:
-          "Must be true only when the user explicitly told you to send this reply.",
+        description: "Must be true only when the user explicitly told you to send this reply.",
       }),
     ),
     messageTag: Type.Optional(
       Type.String({
-        description:
-          "Optional ManyChat message tag for sends outside the normal response window.",
+        description: "Optional ManyChat message tag for sends outside the normal response window.",
       }),
     ),
     otnTopicName: Type.Optional(
@@ -539,9 +538,14 @@ export function renderPromoterCrmRecentInboxGroundingText(result: {
     const followups = Array.isArray(conversation.openFollowupTasks)
       ? conversation.openFollowupTasks.length
       : 0;
+    const channelLabel =
+      readText(conversation.channelLabel) ||
+      readText(conversation.matchedChannel) ||
+      readText(conversation.channel) ||
+      "unknown";
 
     lines.push(
-      `${index + 1}. ${collapseWhitespace(conversation.contactName, 80)} | channel=${readText(conversation.channel) || "unknown"} | needsReply=${conversation.needsReply === true ? "yes" : "no"} | lastActivityAt=${formatIso(conversation.lastActivityAt)}`,
+      `${index + 1}. ${collapseWhitespace(conversation.contactName, 80)} | channel=${channelLabel} | needsReply=${conversation.needsReply === true ? "yes" : "no"} | lastActivityAt=${formatIso(conversation.lastActivityAt)}`,
     );
     lines.push(
       `   lastMessage=${quotePreview(lastMessage?.preview ?? lastMessage?.content)} | total=${readNumber(counts?.totalMessages) ?? 0} inbound=${readNumber(counts?.inboundMessages) ?? 0} outbound=${readNumber(counts?.outboundMessages) ?? 0}`,
@@ -575,7 +579,7 @@ export function renderPromoterCrmConversationThreadGroundingText(result: {
     "Grounded promoter CRM conversation thread.",
     "Use only the contact, channel, timestamps, message previews, and interaction notes returned below. If a fact is missing, say so and call promoter_crm_get_conversation_thread again instead of guessing.",
     `Contact: ${collapseWhitespace(contact.displayName ?? contact.contactId, 80)} | qualityTier=${readText(contact.qualityTier) || "(none)"} | city=${readText(contact.city) || "(none)"}`,
-    `Conversation: channel=${readText(conversation.channel) || "unknown"} | needsReply=${conversation.needsReply === true ? "yes" : "no"} | lastActivityAt=${formatIso(conversation.lastActivityAt)} | totalMessages=${readNumber(readRecord(conversation.counts)?.totalMessages) ?? 0}`,
+    `Conversation: channel=${readText(conversation.channelLabel) || readText(conversation.matchedChannel) || readText(conversation.channel) || "unknown"} | needsReply=${conversation.needsReply === true ? "yes" : "no"} | lastActivityAt=${formatIso(conversation.lastActivityAt)} | totalMessages=${readNumber(readRecord(conversation.counts)?.totalMessages) ?? 0}`,
     `Tags: ${result.tags.length > 0 ? result.tags.join(", ") : "(none)"} | identities=${result.identities.length > 0 ? result.identities.map((identity) => formatIdentity(identity)).join(", ") : "(none)"}`,
     `Links: ${formatUrlFact("replyUrl", conversation.replyUrl)} | ${formatUrlFact("profileUrl", conversation.profileUrl)}`,
     `Latest score: ${latestScore ? String(readNumber(latestScore.overallScore ?? latestScore.overall_score) ?? "(none)") : "(none)"}`,

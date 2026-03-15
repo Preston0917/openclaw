@@ -101,12 +101,60 @@ describe("promoter CRM tools", () => {
     const text = readTextContent(result);
 
     expect(text).toContain("Grounded promoter CRM inbox snapshot");
-    expect(text).toContain("Use only the contacts, channels, timestamps, and message previews returned below.");
+    expect(text).toContain(
+      "Use only the contacts, channels, timestamps, and message previews returned below.",
+    );
     expect(text).toContain("Natalie Radin | channel=manychat | needsReply=yes");
     expect(text).toContain('lastMessage="18 gaf"');
     expect(text).toContain("primaryIdentity=manychat:1266546411");
     expect(text).toContain("replyUrl=https://app.manychat.com/fb3160512/chat/1266546411");
     expect(text).toContain("profileUrl=https://www.instagram.com/natalie_radin/");
+  });
+
+  it("renders instagram inbox queries against ManyChat-backed conversations", async () => {
+    const stateDir = await makeStateDir();
+    withPromoterCrmStore({ stateDir }, (store) => {
+      const amanda = store.upsertContact({
+        displayName: "Amanda Bracaj",
+        identities: [
+          {
+            channel: "manychat",
+            externalId: "210781128",
+            isPrimary: true,
+            replyUrl: "https://app.manychat.com/fb3160512/chat/210781128",
+          },
+          {
+            channel: "instagram",
+            handle: "@amandairl_",
+            profileUrl: "https://www.instagram.com/amandairl_/",
+          },
+        ],
+      });
+      store.logInteraction({
+        contactId: amanda.contactId,
+        channel: "manychat",
+        kind: "reply",
+        direction: "inbound",
+        summary: "Inbound Instagram DM captured by ManyChat.",
+        content: "I wanna come out tn",
+        conversationExternalId: "https://app.manychat.com/fb3160512/chat/210781128",
+        occurredAt: "2026-03-15T18:26:52.654Z",
+      });
+    });
+
+    const tool = createPromoterCrmRecentInboxTool(createApi(stateDir));
+    const result = await tool.execute?.("tool-ig-1", {
+      channel: "instagram",
+      limit: 10,
+      onlyNeedsReply: true,
+    });
+    const text = readTextContent(result);
+
+    expect(text).toContain("Amanda Bracaj | channel=instagram via manychat | needsReply=yes");
+    expect(text).toContain('lastMessage="I wanna come out tn"');
+    expect(text).toContain("primaryIdentity=instagram:amandairl_");
+    expect(text).toContain("replyUrl=https://app.manychat.com/fb3160512/chat/210781128");
+    expect(text).toContain("profileUrl=https://www.instagram.com/amandairl_/");
   });
 
   it("renders grounded conversation threads directly in tool content", async () => {
@@ -248,9 +296,7 @@ describe("promoter CRM tools", () => {
     );
     expect(thread.messages.some((message) => message.direction === "outbound")).toBe(true);
     expect(
-      thread.messages.some(
-        (message) => message.content === "Pull up around 11:30 and I got you.",
-      ),
+      thread.messages.some((message) => message.content === "Pull up around 11:30 and I got you."),
     ).toBe(true);
   });
 });
