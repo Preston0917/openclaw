@@ -19,6 +19,7 @@ import {
   createPromoterCrmLogInteractionTool,
   createPromoterCrmRecentInboxTool,
   createPromoterCrmRankFollowupsTool,
+  createPromoterCrmSendManychatReplyTool,
   createPromoterCrmRecordScoreTool,
   createPromoterCrmRefreshSegmentTool,
   createPromoterCrmStatusTool,
@@ -46,6 +47,7 @@ function registerTools(api: OpenClawPluginApi): void {
     createPromoterCrmRecentInboxTool(api),
     createPromoterCrmGetConversationThreadTool(api),
     createPromoterCrmRankFollowupsTool(api),
+    createPromoterCrmSendManychatReplyTool(api),
   ];
 
   for (const tool of tools) {
@@ -182,6 +184,40 @@ function registerCli(api: OpenClawPluginApi): void {
               }),
             );
             console.log(JSON.stringify(result, null, 2));
+          },
+        );
+
+      crm
+        .command("send-manychat-reply")
+        .description("Send a ManyChat reply and log it into the normalized CRM thread")
+        .option("--conversation-id <id>", "Conversation id to reply in")
+        .option("--contact-id <id>", "Fallback contact id to resolve the latest ManyChat thread")
+        .requiredOption("--text <text>", "Plain-text reply to send")
+        .option("--message-tag <tag>", "Optional ManyChat message tag")
+        .option("--otn-topic-name <name>", "Optional ManyChat One-Time Notification topic name")
+        .requiredOption(
+          "--confirm-send",
+          "Confirm that you explicitly want to send the message",
+        )
+        .action(
+          async (options: {
+            conversationId?: string;
+            contactId?: string;
+            text: string;
+            messageTag?: string;
+            otnTopicName?: string;
+            confirmSend?: boolean;
+          }) => {
+            const tool = createPromoterCrmSendManychatReplyTool(api);
+            const result = await tool.execute?.("cli-send-manychat-reply", {
+              conversationId: options.conversationId,
+              contactId: options.contactId,
+              text: options.text,
+              messageTag: options.messageTag,
+              otnTopicName: options.otnTopicName,
+              confirmSend: options.confirmSend,
+            });
+            console.log(JSON.stringify(result?.details ?? result, null, 2));
           },
         );
 

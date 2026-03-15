@@ -221,6 +221,11 @@ export type RankFollowupsInput = {
   minDaysSinceLastInteraction?: number;
 };
 
+export type ResolveManychatReplyTargetInput = {
+  conversationId?: string;
+  contactId?: string;
+};
+
 type StoreOptions = {
   stateDir: string;
 };
@@ -545,6 +550,15 @@ function choosePreferredIdentityUrl(
     }
   }
   return null;
+}
+
+function chooseChannelIdentityUrl(
+  identities: Array<Record<string, unknown>>,
+  channel: IdentityChannel,
+  key: "reply_url" | "profile_url",
+): string | null {
+  const identity = identities.find((entry) => readIdentityChannel(entry.channel) === channel);
+  return identity ? readIdentityUrl(identity, key) : null;
 }
 
 function normalizeSegmentDefinition(input: SegmentDefinition | undefined): SegmentDefinition {
@@ -929,14 +943,23 @@ export class PromoterCrmStore {
         ORDER BY occurred_at DESC
       `)
       .all() as Array<{ contact_id?: string; metadata_json?: string }>;
-    const processed = new Set<string>();
+    const aggregated = new Map<
+      string,
+      {
+        manychatContactId?: string;
+        liveChatUrl?: string;
+        profilePic?: string;
+        instagramHandle?: string;
+        instagramId?: string;
+        instagramProfileUrl?: string;
+      }
+    >();
 
     for (const row of rows) {
       const contactId = maybeString(row.contact_id);
-      if (!contactId || processed.has(contactId)) {
+      if (!contactId) {
         continue;
       }
-      processed.add(contactId);
 
       const metadata = parseJsonObject(row.metadata_json);
       if (!metadata) {
@@ -961,24 +984,41 @@ export class PromoterCrmStore {
         buildInstagramProfileUrl(instagramHandle) ||
         undefined;
 
-      if (manychatContactId || liveChatUrl || profilePic) {
+      const current = aggregated.get(contactId) ?? {};
+      aggregated.set(contactId, {
+        manychatContactId: current.manychatContactId ?? manychatContactId,
+        liveChatUrl: current.liveChatUrl ?? liveChatUrl,
+        profilePic: current.profilePic ?? profilePic,
+        instagramHandle: current.instagramHandle ?? instagramHandle,
+        instagramId: current.instagramId ?? instagramId,
+        instagramProfileUrl: current.instagramProfileUrl ?? instagramProfileUrl,
+      });
+    }
+
+    for (const [contactId, data] of aggregated) {
+      if (data.manychatContactId || data.liveChatUrl || data.profilePic) {
         this.backfillIdentityLink(contactId, {
           channel: "manychat",
-          externalId: manychatContactId,
-          profileUrl: liveChatUrl,
-          replyUrl: liveChatUrl,
-          avatarUrl: profilePic,
+          externalId: data.manychatContactId,
+          profileUrl: data.liveChatUrl,
+          replyUrl: data.liveChatUrl,
+          avatarUrl: data.profilePic,
           source: "manychat",
         });
       }
 
-      if (instagramHandle || instagramId || instagramProfileUrl || profilePic) {
+      if (
+        data.instagramHandle ||
+        data.instagramId ||
+        data.instagramProfileUrl ||
+        data.profilePic
+      ) {
         this.backfillIdentityLink(contactId, {
           channel: "instagram",
-          externalId: instagramId,
-          handle: instagramHandle,
-          profileUrl: instagramProfileUrl,
-          avatarUrl: profilePic,
+          externalId: data.instagramId,
+          handle: data.instagramHandle,
+          profileUrl: data.instagramProfileUrl,
+          avatarUrl: data.profilePic,
           source: "manychat",
         });
       }
@@ -3224,6 +3264,82 @@ export class PromoterCrmStore {
       messages,
       interactions,
       followupTasks,
+    };
+  }
+
+  resolveManychatReplyTarget(input: ResolveManychatReplyTargetInput): {
+    contactId: string;
+    contactName: string;
+    conversationId: string;
+    externalThreadId: string | null;
+    subscriberId: string;
+    replyUrl: string | null;
+    profileUrl: string | null;
+    instagramProfileUrl: string | null;
+  } {
+    if (!input.conversationId && !input.contactId) {
+      throw new Error("Provide conversationId or contactId to resolve a ManyChat reply target.");
+    }
+
+    const thread = this.getConversationThread({
+      conversationId: input.conversationId,
+      contactId: input.contactId,
+      channel: "manychat",
+      limit: 1,
+    });
+    const identities = thread.identities;
+    const manychatIdentity =
+      identities.find((identity) => identity.channel === "manychat") ?? null;
+    if (!manychatIdentity) {
+      throw new Error("No ManyChat identity is linked to this contact.");
+    }
+
+    const subscriberId =
+      maybeString(
+        typeof manychatIdentity.external_id === "string"
+          ? manychatIdentity.external_id
+          : typeof manychatIdentity.externalId === "string"
+            ? manychatIdentity.externalId
+            : undefined,
+      ) ?? null;
+    if (!subscriberId || !/^\d+$/.test(subscriberId)) {
+      throw new Error("ManyChat subscriber id is missing or invalid for this contact.");
+    }
+
+    const instagramProfileUrl =
+      chooseChannelIdentityUrl(identities, "instagram", "profile_url") ??
+      chooseChannelIdentityUrl(identities, "instagram", "reply_url");
+    const conversation = thread.conversation as Record<string, unknown>;
+    const contact = thread.contact as Record<string, unknown>;
+    const contactId =
+      typeof contact.contactId === "string" ? contact.contactId : "";
+    const contactName =
+      (typeof contact.displayName === "string" && contact.displayName.trim()) ||
+      contactId;
+    const conversationId =
+      typeof conversation.conversationId === "string" ? conversation.conversationId : "";
+    const externalThreadIdRaw =
+      (typeof conversation.externalThreadId === "string" && conversation.externalThreadId) ||
+      (typeof conversation.replyUrl === "string" && conversation.replyUrl) ||
+      undefined;
+    const replyUrlRaw =
+      (typeof conversation.replyUrl === "string" && conversation.replyUrl) || undefined;
+    const profileUrlRaw =
+      (typeof conversation.profileUrl === "string" && conversation.profileUrl) || undefined;
+
+    return {
+      contactId,
+      contactName,
+      conversationId,
+      externalThreadId: maybeString(externalThreadIdRaw) ?? null,
+      subscriberId,
+      replyUrl:
+        maybeString(replyUrlRaw) ??
+        choosePreferredIdentityUrl(identities, "manychat", "reply_url"),
+      profileUrl:
+        maybeString(profileUrlRaw) ??
+        choosePreferredIdentityUrl(identities, "manychat", "profile_url"),
+      instagramProfileUrl: instagramProfileUrl ?? null,
     };
   }
 

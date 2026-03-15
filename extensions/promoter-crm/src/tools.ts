@@ -1,5 +1,7 @@
 import { Static, Type } from "@sinclair/typebox";
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { randomUUID } from "node:crypto";
+import { sendManychatText } from "./manychat-api.js";
 import {
   type PromoterCrmStore,
   type AttendanceResult,
@@ -399,6 +401,38 @@ const RankFollowupsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const SendManychatReplySchema = Type.Object(
+  {
+    conversationId: Type.Optional(
+      Type.String({ description: "ManyChat conversation id to reply in." }),
+    ),
+    contactId: Type.Optional(
+      Type.String({
+        description: "Fallback contact id when replying to the latest ManyChat thread for a contact.",
+      }),
+    ),
+    text: Type.String({ description: "Plain-text reply to send through ManyChat." }),
+    confirmSend: Type.Optional(
+      Type.Boolean({
+        description:
+          "Must be true only when the user explicitly told you to send this reply.",
+      }),
+    ),
+    messageTag: Type.Optional(
+      Type.String({
+        description:
+          "Optional ManyChat message tag for sends outside the normal response window.",
+      }),
+    ),
+    otnTopicName: Type.Optional(
+      Type.String({
+        description: "Optional ManyChat One-Time Notification topic name.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 function executeWithStore<T>(api: OpenClawPluginApi, fn: (store: PromoterCrmStore) => T): T {
   const stateDir = api.runtime.state.resolveStateDir(process.env);
   return withPromoterCrmStore({ stateDir }, fn);
@@ -584,6 +618,7 @@ type RefreshSegmentParams = Static<typeof RefreshSegmentSchema>;
 type LogInteractionParams = Static<typeof LogInteractionSchema>;
 type GetContactParams = Static<typeof GetContactSchema>;
 type GetVenueAttendanceParams = Static<typeof GetVenueAttendanceSchema>;
+type SendManychatReplyParams = Static<typeof SendManychatReplySchema>;
 
 export function createPromoterCrmStatusTool(api: OpenClawPluginApi): AnyAgentTool {
   return {
@@ -940,6 +975,99 @@ export function createPromoterCrmRankFollowupsTool(api: OpenClawPluginApi): AnyA
           },
         ],
         details: result,
+      };
+    },
+  };
+}
+
+export function createPromoterCrmSendManychatReplyTool(api: OpenClawPluginApi): AnyAgentTool {
+  return {
+    name: "promoter_crm_send_manychat_reply",
+    label: "Promoter CRM Send ManyChat Reply",
+    description:
+      "Send a ManyChat reply into the normalized CRM thread and log the outbound message. Use this only when the user explicitly asked you to send the reply.",
+    parameters: SendManychatReplySchema,
+    execute: async (_toolCallId, params) => {
+      const typed = params as SendManychatReplyParams;
+      if (typed.confirmSend !== true) {
+        throw new Error(
+          "Refusing to send ManyChat reply without confirmSend=true after explicit user approval.",
+        );
+      }
+
+      const apiKey = process.env.MANYCHAT_API_KEY?.trim();
+      if (!apiKey) {
+        throw new Error("MANYCHAT_API_KEY is not configured for the OpenClaw gateway.");
+      }
+
+      const target = executeWithStore(api, (store) =>
+        store.resolveManychatReplyTarget({
+          conversationId: typed.conversationId,
+          contactId: typed.contactId,
+        }),
+      );
+
+      const providerResult = await sendManychatText({
+        apiKey,
+        subscriberId: Number(target.subscriberId),
+        text: typed.text,
+        messageTag: typed.messageTag,
+        otnTopicName: typed.otnTopicName,
+      });
+
+      const occurredAt = new Date().toISOString();
+      const messageExternalId = `manychat-outbound-${randomUUID()}`;
+      const interactionId = `manychat-outbound-interaction-${randomUUID()}`;
+      const summaryPreview = collapseWhitespace(typed.text, 120);
+
+      executeWithStore(api, (store) =>
+        store.logInteraction({
+          interactionId,
+          contactId: target.contactId,
+          channel: "manychat",
+          kind: "outreach",
+          direction: "outbound",
+          summary: `ManyChat outbound reply: ${summaryPreview}`,
+          occurredAt,
+          conversationExternalId: target.externalThreadId ?? target.replyUrl ?? undefined,
+          messageExternalId,
+          messageStatus: "sent",
+          content: typed.text,
+          metadata: {
+            provider: "manychat",
+            endpoint: providerResult.endpoint,
+            responseStatus: providerResult.responseStatus,
+            responseBody: providerResult.responseBody,
+            requestBody: providerResult.requestBody,
+            subscriberId: target.subscriberId,
+            replyUrl: target.replyUrl,
+            profileUrl: target.profileUrl,
+            instagramProfileUrl: target.instagramProfileUrl,
+          },
+        }),
+      );
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Sent ManyChat reply to ${target.contactName}.`,
+          },
+        ],
+        details: {
+          contactId: target.contactId,
+          contactName: target.contactName,
+          conversationId: target.conversationId,
+          subscriberId: target.subscriberId,
+          replyUrl: target.replyUrl,
+          profileUrl: target.profileUrl,
+          instagramProfileUrl: target.instagramProfileUrl,
+          sentAt: occurredAt,
+          text: typed.text,
+          providerResult,
+          interactionId,
+          messageExternalId,
+        },
       };
     },
   };

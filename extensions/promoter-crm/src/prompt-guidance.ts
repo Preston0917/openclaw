@@ -16,6 +16,8 @@ When the promoter CRM plugin is enabled:
 - Prefer promoter_crm_recent_inbox when you need to see who messaged recently or which conversations need a reply.
 - Prefer promoter_crm_get_conversation_thread when you need the latest thread context before summarizing or drafting a reply.
 - When the user asks where to reply or asks for profile/chat links, look for replyUrl and profileUrl in the latest CRM inbox or conversation-thread tool output instead of saying the URLs are unavailable.
+- Draft replies in normal assistant text unless the user explicitly asks you to send the message.
+- Use promoter_crm_send_manychat_reply only after the user clearly approved sending a specific ManyChat reply.
 - Prefer promoter_crm_rank_followups when deciding who the promoter should hit next.
 - Prefer promoter_crm_log_interaction after meaningful outreach, replies, summaries, or attendance updates.
 - Prefer promoter_crm_get_contact before drafting personalized outreach so you can use unified history, notes, invites, and latest score context.

@@ -65,7 +65,8 @@ maps onto the current SQLite schema.
             "promoter_crm_get_contact",
             "promoter_crm_get_venue_attendance",
             "promoter_crm_recent_inbox",
-            "promoter_crm_get_conversation_thread"
+            "promoter_crm_get_conversation_thread",
+            "promoter_crm_send_manychat_reply"
           ]
         }
       }
@@ -84,6 +85,7 @@ openclaw promoter-crm import-manychat ./manychat-contact.json
 openclaw promoter-crm followup-queue --limit 25
 openclaw promoter-crm recent-inbox --limit 20 --only-needs-reply
 openclaw promoter-crm conversation-thread --contact-id <contact-id> --channel manychat
+openclaw promoter-crm send-manychat-reply --contact-id <contact-id> --text "On it" --confirm-send
 ```
 
 ## What it covers today
@@ -102,6 +104,7 @@ openclaw promoter-crm conversation-thread --contact-id <contact-id> --channel ma
 - Operational ingest tables for future Google Contacts syncs
 - Persisted follow-up queue ranking driven by score, invite state, and stale conversations
 - Read-model inbox queries for recent inbound conversations and normalized thread inspection
+- Outbound ManyChat replies with normalized CRM logging so OpenClaw can see what it sent
 
 ## Foundation docs
 
@@ -147,6 +150,18 @@ Recommended pattern:
   want to import live conversation events.
 - Replays are idempotent for the same message ids or the same synthesized
   ManyChat message fingerprint, so webhook retries do not multiply the thread.
+- Outbound replies sent through `promoter_crm_send_manychat_reply` are logged back
+  into the same normalized conversation so the CRM thread shows what OpenClaw sent.
+
+To enable outbound replies, make the ManyChat API key available to the gateway:
+
+```bash
+export MANYCHAT_API_KEY="page_id:api_token"
+```
+
+The reply tool uses ManyChat's `sendContent` endpoint with Dynamic Block `v2`
+text payloads and should only be used after the user explicitly approves the
+send.
 
 ## Database location
 
