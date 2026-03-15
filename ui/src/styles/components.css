@@ -3771,6 +3771,7 @@
   display: grid;
   grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
   gap: 18px;
+  height: calc(100dvh - var(--topbar-height, 72px) - 36px);
   min-height: 0;
   align-items: stretch;
 }
@@ -3778,12 +3779,14 @@
 .crm-panel {
   display: grid;
   gap: 14px;
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
 
 .crm-panel--thread {
   grid-template-rows: auto auto auto minmax(0, 1fr) auto;
-  min-height: calc(100vh - var(--topbar-height, 72px) - 52px);
+  min-height: 0;
 }
 
 .crm-panel__header {
@@ -3949,8 +3952,8 @@
   flex-direction: column;
   justify-content: flex-end;
   gap: 12px;
-  min-height: 280px;
-  max-height: 64vh;
+  min-height: 0;
+  height: 100%;
   overflow: auto;
   padding: 12px 4px 8px;
   border-radius: var(--radius-lg);
@@ -4022,12 +4025,18 @@
 .crm-composer {
   display: grid;
   gap: 12px;
-  padding-top: 4px;
+  min-height: 0;
+  padding-top: 12px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, transparent 0%, transparent), var(--card) 24px),
+    var(--card);
+  border-top: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
 }
 
 .crm-composer__input {
   width: 100%;
-  min-height: 88px;
+  min-height: 64px;
+  max-height: 140px;
   resize: vertical;
 }
 
@@ -4035,6 +4044,7 @@
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .crm-composer__hint {
@@ -4075,6 +4085,7 @@
 @media (max-width: 980px) {
   .crm-layout {
     grid-template-columns: 1fr;
+    height: auto;
   }
 
   .crm-toolbar {
@@ -4086,7 +4097,7 @@
   }
 
   .crm-thread {
-    max-height: none;
+    height: auto;
   }
 
   .crm-panel--thread {
