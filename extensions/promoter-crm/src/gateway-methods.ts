@@ -3,6 +3,7 @@ import type {
   GatewayRequestHandlerOptions,
   OpenClawPluginApi,
 } from "openclaw/plugin-sdk/core";
+import { ErrorCodes, errorShape } from "../../../src/gateway/protocol/index.js";
 import { sendManychatText } from "./manychat-api.js";
 import type { IdentityChannel } from "./store.js";
 import { withPromoterCrmStore } from "./store.js";
@@ -64,7 +65,14 @@ function sendError(
   fallback = "Promoter CRM request failed.",
 ): void {
   const message = err instanceof Error ? err.message : fallback;
-  respond(false, { error: message });
+  respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
+}
+
+function sendInvalidRequest(
+  respond: GatewayRequestHandlerOptions["respond"],
+  message: string,
+): void {
+  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
 }
 
 function resolveStateDir(api: OpenClawPluginApi): string {
@@ -101,7 +109,7 @@ export function registerPromoterCrmGatewayMethods(api: OpenClawPluginApi): void 
         const conversationId = maybeString(params.conversationId);
         const contactId = maybeString(params.contactId);
         if (!conversationId && !contactId) {
-          respond(false, { error: "conversationId or contactId is required." });
+          sendInvalidRequest(respond, "conversationId or contactId is required.");
           return;
         }
         const result = await withPromoterCrmStore({ stateDir: resolveStateDir(api) }, (store) =>
@@ -125,13 +133,13 @@ export function registerPromoterCrmGatewayMethods(api: OpenClawPluginApi): void 
       try {
         const text = normalizeWhitespace(params.text);
         if (!text) {
-          respond(false, { error: "Reply text is required." });
+          sendInvalidRequest(respond, "Reply text is required.");
           return;
         }
         const conversationId = maybeString(params.conversationId);
         const contactId = maybeString(params.contactId);
         if (!conversationId && !contactId) {
-          respond(false, { error: "conversationId or contactId is required." });
+          sendInvalidRequest(respond, "conversationId or contactId is required.");
           return;
         }
 
@@ -197,20 +205,23 @@ export function registerPromoterCrmGatewayMethods(api: OpenClawPluginApi): void 
       try {
         const text = normalizeWhitespace(params.text);
         if (!text) {
-          respond(false, { error: "Reply text is required." });
+          sendInvalidRequest(respond, "Reply text is required.");
           return;
         }
 
         const apiKey = process.env.MANYCHAT_API_KEY?.trim();
         if (!apiKey) {
-          respond(false, { error: "MANYCHAT_API_KEY is not configured for the OpenClaw gateway." });
+          sendInvalidRequest(
+            respond,
+            "MANYCHAT_API_KEY is not configured for the OpenClaw gateway.",
+          );
           return;
         }
 
         const conversationId = maybeString(params.conversationId);
         const contactId = maybeString(params.contactId);
         if (!conversationId && !contactId) {
-          respond(false, { error: "conversationId or contactId is required." });
+          sendInvalidRequest(respond, "conversationId or contactId is required.");
           return;
         }
 
@@ -218,6 +229,7 @@ export function registerPromoterCrmGatewayMethods(api: OpenClawPluginApi): void 
           store.resolveManychatReplyTarget({
             conversationId,
             contactId,
+            channel: parseIdentityChannel(params.channel),
           }),
         );
 
@@ -225,6 +237,7 @@ export function registerPromoterCrmGatewayMethods(api: OpenClawPluginApi): void 
           apiKey,
           subscriberId: Number(target.subscriberId),
           text,
+          contentType: target.matchedChannel === "instagram" ? "instagram" : undefined,
           messageTag: maybeString(params.messageTag),
           otnTopicName: maybeString(params.otnTopicName),
         });
@@ -254,6 +267,7 @@ export function registerPromoterCrmGatewayMethods(api: OpenClawPluginApi): void 
               responseBody: providerResult.responseBody,
               requestBody: providerResult.requestBody,
               subscriberId: target.subscriberId,
+              matchedChannel: target.matchedChannel,
               replyUrl: target.replyUrl,
               profileUrl: target.profileUrl,
               instagramProfileUrl: target.instagramProfileUrl,
@@ -269,6 +283,7 @@ export function registerPromoterCrmGatewayMethods(api: OpenClawPluginApi): void 
             messageExternalId,
             sentAt: occurredAt,
             text,
+            matchedChannel: target.matchedChannel,
             replyUrl: target.replyUrl,
             profileUrl: target.profileUrl,
             instagramProfileUrl: target.instagramProfileUrl,

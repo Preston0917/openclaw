@@ -279,6 +279,7 @@ describe("promoter CRM tools", () => {
           data: {
             version: "v2",
             content: {
+              type: "instagram",
               messages: [{ type: "text", text: "Pull up around 11:30 and I got you." }],
               actions: [],
               quick_replies: [],

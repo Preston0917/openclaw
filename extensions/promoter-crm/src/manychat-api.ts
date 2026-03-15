@@ -1,9 +1,12 @@
 const MANYCHAT_API_BASE_URL = "https://api.manychat.com";
 
+export type ManychatContentType = "instagram";
+
 export type SendManychatTextInput = {
   apiKey: string;
   subscriberId: number;
   text: string;
+  contentType?: ManychatContentType;
   messageTag?: string;
   otnTopicName?: string;
 };
@@ -26,7 +29,10 @@ function parseJsonOrText(bodyText: string): unknown {
   }
 }
 
-export function buildManychatTextContent(text: string): Record<string, unknown> {
+export function buildManychatTextContent(
+  text: string,
+  contentType?: ManychatContentType,
+): Record<string, unknown> {
   const trimmed = text.trim();
   if (!trimmed) {
     throw new Error("ManyChat reply text is required.");
@@ -34,6 +40,7 @@ export function buildManychatTextContent(text: string): Record<string, unknown> 
   return {
     version: "v2",
     content: {
+      ...(contentType ? { type: contentType } : {}),
       messages: [
         {
           type: "text",
@@ -58,7 +65,7 @@ export async function sendManychatText(input: SendManychatTextInput): Promise<Se
   const endpoint = `${MANYCHAT_API_BASE_URL}/fb/sending/sendContent`;
   const requestBody: Record<string, unknown> = {
     subscriber_id: input.subscriberId,
-    data: buildManychatTextContent(input.text),
+    data: buildManychatTextContent(input.text, input.contentType),
   };
   if (input.messageTag?.trim()) {
     requestBody.message_tag = input.messageTag.trim();

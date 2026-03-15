@@ -225,6 +225,7 @@ export type RankFollowupsInput = {
 export type ResolveManychatReplyTargetInput = {
   conversationId?: string;
   contactId?: string;
+  channel?: IdentityChannel;
 };
 
 type StoreOptions = {
@@ -3419,6 +3420,7 @@ export class PromoterCrmStore {
     conversationId: string;
     externalThreadId: string | null;
     subscriberId: string;
+    matchedChannel: IdentityChannel;
     replyUrl: string | null;
     profileUrl: string | null;
     instagramProfileUrl: string | null;
@@ -3430,7 +3432,7 @@ export class PromoterCrmStore {
     const thread = this.getConversationThread({
       conversationId: input.conversationId,
       contactId: input.contactId,
-      channel: "manychat",
+      channel: input.channel,
       limit: 1,
     });
     const identities = thread.identities;
@@ -3461,6 +3463,19 @@ export class PromoterCrmStore {
       (typeof contact.displayName === "string" && contact.displayName.trim()) || contactId;
     const conversationId =
       typeof conversation.conversationId === "string" ? conversation.conversationId : "";
+    const transportChannel =
+      (typeof conversation.channel === "string" &&
+        readIdentityChannel(conversation.channel as IdentityChannel)) ||
+      "manychat";
+    const inferredInstagramChannel =
+      transportChannel === "manychat" && contactHasIdentityChannel(identities, "instagram");
+    const resolvedMatchedChannel =
+      typeof conversation.matchedChannel === "string"
+        ? readIdentityChannel(conversation.matchedChannel as IdentityChannel)
+        : null;
+    const matchedChannel = inferredInstagramChannel
+      ? "instagram"
+      : resolvedMatchedChannel ?? transportChannel;
     const externalThreadIdRaw =
       (typeof conversation.externalThreadId === "string" && conversation.externalThreadId) ||
       (typeof conversation.replyUrl === "string" && conversation.replyUrl) ||
@@ -3476,6 +3491,7 @@ export class PromoterCrmStore {
       conversationId,
       externalThreadId: maybeString(externalThreadIdRaw) ?? null,
       subscriberId,
+      matchedChannel,
       replyUrl:
         maybeString(replyUrlRaw) ?? choosePreferredIdentityUrl(identities, "manychat", "reply_url"),
       profileUrl:

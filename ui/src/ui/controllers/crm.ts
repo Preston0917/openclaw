@@ -75,6 +75,10 @@ function effectiveChannel(channel: CrmChannelFilter): string | undefined {
   return channel === "all" ? undefined : channel;
 }
 
+function describeUiError(err: unknown): string {
+  return err instanceof Error && err.message.trim() ? err.message : String(err);
+}
+
 function resolveSelectedConversationId(
   items: CrmInboxItem[],
   current: string | null,
@@ -116,7 +120,7 @@ export async function loadCrmInbox(
     }
     await loadCrmThread(state, { conversationId: state.crmSelectedConversationId });
   } catch (err) {
-    state.crmInboxError = String(err);
+    state.crmInboxError = describeUiError(err);
   } finally {
     state.crmInboxLoading = false;
   }
@@ -155,7 +159,7 @@ export async function loadCrmThread(
         : conversationId;
     state.crmSelectedConversationId = resolvedConversationId ?? null;
   } catch (err) {
-    state.crmThreadError = String(err);
+    state.crmThreadError = describeUiError(err);
   } finally {
     state.crmThreadLoading = false;
   }
@@ -193,7 +197,7 @@ async function runReplyAction(
         : `Logged manual reply for ${result.contactName}.`;
     await loadCrmInbox(state, { selectConversationId: result.conversationId });
   } catch (err) {
-    state.crmActionError = String(err);
+    state.crmActionError = describeUiError(err);
   } finally {
     if (method === "promoter-crm.reply.send") {
       state.crmSendBusy = false;

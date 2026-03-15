@@ -412,6 +412,12 @@ const SendManychatReplySchema = Type.Object(
           "Fallback contact id when replying to the latest ManyChat thread for a contact.",
       }),
     ),
+    channel: Type.Optional(
+      stringEnum(
+        IDENTITY_CHANNELS,
+        "Optional logical channel for the thread, such as instagram when ManyChat is the transport.",
+      ),
+    ),
     text: Type.String({ description: "Plain-text reply to send through ManyChat." }),
     confirmSend: Type.Optional(
       Type.Boolean({
@@ -1008,6 +1014,7 @@ export function createPromoterCrmSendManychatReplyTool(api: OpenClawPluginApi): 
         store.resolveManychatReplyTarget({
           conversationId: typed.conversationId,
           contactId: typed.contactId,
+          channel: typed.channel,
         }),
       );
 
@@ -1015,6 +1022,7 @@ export function createPromoterCrmSendManychatReplyTool(api: OpenClawPluginApi): 
         apiKey,
         subscriberId: Number(target.subscriberId),
         text: typed.text,
+        contentType: target.matchedChannel === "instagram" ? "instagram" : undefined,
         messageTag: typed.messageTag,
         otnTopicName: typed.otnTopicName,
       });
@@ -1045,6 +1053,7 @@ export function createPromoterCrmSendManychatReplyTool(api: OpenClawPluginApi): 
               responseBody: providerResult.responseBody,
               requestBody: providerResult.requestBody,
               subscriberId: target.subscriberId,
+              matchedChannel: target.matchedChannel,
               replyUrl: target.replyUrl,
               profileUrl: target.profileUrl,
               instagramProfileUrl: target.instagramProfileUrl,
@@ -1067,6 +1076,7 @@ export function createPromoterCrmSendManychatReplyTool(api: OpenClawPluginApi): 
           contactName: target.contactName,
           conversationId: target.conversationId,
           subscriberId: target.subscriberId,
+          matchedChannel: target.matchedChannel,
           replyUrl: target.replyUrl,
           profileUrl: target.profileUrl,
           instagramProfileUrl: target.instagramProfileUrl,

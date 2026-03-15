@@ -193,6 +193,10 @@ function registerCli(api: OpenClawPluginApi): void {
         .description("Send a ManyChat reply and log it into the normalized CRM thread")
         .option("--conversation-id <id>", "Conversation id to reply in")
         .option("--contact-id <id>", "Fallback contact id to resolve the latest ManyChat thread")
+        .option(
+          "--channel <channel>",
+          "Optional logical channel, such as instagram when ManyChat is the transport",
+        )
         .requiredOption("--text <text>", "Plain-text reply to send")
         .option("--message-tag <tag>", "Optional ManyChat message tag")
         .option("--otn-topic-name <name>", "Optional ManyChat One-Time Notification topic name")
@@ -204,6 +208,7 @@ function registerCli(api: OpenClawPluginApi): void {
           async (options: {
             conversationId?: string;
             contactId?: string;
+            channel?: string;
             text: string;
             messageTag?: string;
             otnTopicName?: string;
@@ -213,6 +218,7 @@ function registerCli(api: OpenClawPluginApi): void {
             const result = await tool.execute?.("cli-send-manychat-reply", {
               conversationId: options.conversationId,
               contactId: options.contactId,
+              channel: options.channel,
               text: options.text,
               messageTag: options.messageTag,
               otnTopicName: options.otnTopicName,
