@@ -21,6 +21,7 @@ import {
   type BlueBubblesMonitorOptions,
   type WebhookTarget,
 } from "./monitor-shared.js";
+import { startBlueBubblesPollingFallback } from "./polling.js";
 import { fetchBlueBubblesServerInfo } from "./probe.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
 
@@ -293,9 +294,19 @@ export async function monitorBlueBubblesProvider(
     path,
     statusSink,
   });
+  const stopPolling = startBlueBubblesPollingFallback({
+    account,
+    config,
+    runtime,
+    core,
+    abortSignal,
+    statusSink,
+    serverInfo,
+  });
 
   return await new Promise((resolve) => {
     const stop = () => {
+      stopPolling();
       unregister();
       resolve();
     };

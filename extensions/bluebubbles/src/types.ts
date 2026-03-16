@@ -9,6 +9,18 @@ export type BlueBubblesGroupConfig = {
   tools?: { allow?: string[]; deny?: string[] };
 };
 
+export type BlueBubblesPollingConfig = {
+  /**
+   * Force polling on/off. When omitted, OpenClaw auto-enables polling if the
+   * BlueBubbles helper is disconnected and webhooks are likely to be silent.
+   */
+  enabled?: boolean;
+  /** Polling interval in milliseconds. */
+  intervalMs?: number;
+  /** How far back to look on first poll, in milliseconds. */
+  initialLookbackMs?: number;
+};
+
 export type BlueBubblesAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -24,6 +36,8 @@ export type BlueBubblesAccountConfig = {
   password?: string;
   /** Webhook path for the gateway HTTP server. */
   webhookPath?: string;
+  /** Optional polling fallback for setups where BlueBubbles webhooks don't fire. */
+  polling?: BlueBubblesPollingConfig;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: DmPolicy;
   allowFrom?: Array<string | number>;

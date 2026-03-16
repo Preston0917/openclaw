@@ -29,6 +29,14 @@ const bluebubblesGroupConfigSchema = z.object({
   tools: ToolPolicySchema,
 });
 
+const bluebubblesPollingConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    intervalMs: z.number().int().min(1000).optional(),
+    initialLookbackMs: z.number().int().min(0).optional(),
+  })
+  .optional();
+
 const bluebubblesAccountSchema = z
   .object({
     name: z.string().optional(),
@@ -37,6 +45,7 @@ const bluebubblesAccountSchema = z
     serverUrl: z.string().optional(),
     password: buildSecretInputSchema().optional(),
     webhookPath: z.string().optional(),
+    polling: bluebubblesPollingConfigSchema,
     dmPolicy: DmPolicySchema.optional(),
     allowFrom: AllowFromListSchema,
     groupAllowFrom: AllowFromListSchema,
