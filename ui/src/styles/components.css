@@ -3788,7 +3788,8 @@
 }
 
 .crm-panel--thread {
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   align-content: stretch;
 }
@@ -3951,11 +3952,18 @@
   flex-wrap: wrap;
 }
 
+.crm-thread__feedback {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+}
+
 .crm-thread {
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 12px;
+  flex: 1 1 auto;
   min-height: 0;
   height: 100%;
   overflow: auto;
@@ -4047,11 +4055,9 @@
 
 .crm-composer {
   display: grid;
+  flex: 0 0 auto;
   gap: 12px;
   min-height: 0;
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
   margin-top: 4px;
   padding-top: 12px;
   padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));

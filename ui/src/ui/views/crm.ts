@@ -434,9 +434,11 @@ export function renderCrm(props: CrmProps) {
                   }
                 </div>
 
-                ${props.actionMessage ? html`<div class="callout">${props.actionMessage}</div>` : nothing}
-                ${props.actionError ? html`<div class="callout danger">${props.actionError}</div>` : nothing}
-                ${props.threadError ? html`<div class="callout danger">${props.threadError}</div>` : nothing}
+                <div class="crm-thread__feedback">
+                  ${props.actionMessage ? html`<div class="callout">${props.actionMessage}</div>` : nothing}
+                  ${props.actionError ? html`<div class="callout danger">${props.actionError}</div>` : nothing}
+                  ${props.threadError ? html`<div class="callout danger">${props.threadError}</div>` : nothing}
+                </div>
 
                 <div class="crm-thread crm-chat__messages">
                   ${
