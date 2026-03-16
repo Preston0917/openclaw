@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { GatewayRequestHandlerOptions, OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { ErrorCodes, errorShape } from "../../../src/gateway/protocol/index.js";
+import { syncBlueBubblesIntoPromoterCrm } from "./bluebubbles-live-sync.js";
 import { sendManychatText } from "./manychat-api.js";
 import type { IdentityChannel } from "./store.js";
 import { withPromoterCrmStore } from "./store.js";
@@ -76,9 +77,16 @@ export function registerPromoterCrmGatewayMethods(api: OpenClawPluginApi): void 
     "promoter-crm.inbox.list",
     async ({ params, respond }: GatewayRequestHandlerOptions) => {
       try {
+        const channel = parseIdentityChannel(params.channel);
+        await syncBlueBubblesIntoPromoterCrm({ api, channel }).catch((err) => {
+          api.logger.warn("promoter-crm: bluebubbles inbox sync skipped", {
+            channel,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
         const result = await withPromoterCrmStore({ stateDir: resolveStateDir(api) }, (store) =>
           store.getRecentInbox({
-            channel: parseIdentityChannel(params.channel),
+            channel,
             limit: parseBoundedInteger(params.limit, 1, 200, 100),
             onlyNeedsReply: params.onlyNeedsReply === true,
             sinceHours:
@@ -100,15 +108,24 @@ export function registerPromoterCrmGatewayMethods(api: OpenClawPluginApi): void 
       try {
         const conversationId = maybeString(params.conversationId);
         const contactId = maybeString(params.contactId);
+        const channel = parseIdentityChannel(params.channel);
         if (!conversationId && !contactId) {
           sendInvalidRequest(respond, "conversationId or contactId is required.");
           return;
         }
+        await syncBlueBubblesIntoPromoterCrm({ api, channel }).catch((err) => {
+          api.logger.warn("promoter-crm: bluebubbles thread sync skipped", {
+            channel,
+            conversationId,
+            contactId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
         const result = await withPromoterCrmStore({ stateDir: resolveStateDir(api) }, (store) =>
           store.getConversationThread({
             conversationId,
             contactId,
-            channel: parseIdentityChannel(params.channel),
+            channel,
             limit: parseBoundedInteger(params.limit, 1, 200, 100),
           }),
         );

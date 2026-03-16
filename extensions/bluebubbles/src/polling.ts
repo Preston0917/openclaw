@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
+import { mirrorBlueBubblesMessageToPromoterCrm } from "./crm-mirror.js";
 import { normalizeWebhookMessage } from "./monitor-normalize.js";
+import { buildMessagePlaceholder } from "./monitor-normalize.js";
 import { processMessage } from "./monitor-processing.js";
 import type {
   BlueBubblesCoreRuntime,
@@ -8,6 +10,7 @@ import type {
   WebhookTarget,
 } from "./monitor-shared.js";
 import type { BlueBubblesServerInfo } from "./probe.js";
+import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
 import { buildBlueBubblesApiUrl, blueBubblesFetchWithTimeout } from "./types.js";
 
 type BlueBubblesPollingTarget = {
@@ -21,7 +24,7 @@ type BlueBubblesPollingTarget = {
 type PolledBlueBubblesMessage = Record<string, unknown>;
 
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
-const DEFAULT_INITIAL_LOOKBACK_MS = 15 * 60 * 1_000;
+const DEFAULT_INITIAL_LOOKBACK_MS = 2 * 60 * 60 * 1_000;
 const DEFAULT_POLL_LIMIT = 100;
 const SEEN_MESSAGE_TTL_MS = 30 * 60 * 1_000;
 const MAX_SEEN_MESSAGE_IDS = 2_048;
@@ -74,6 +77,22 @@ function buildSeenMessageKey(record: Record<string, unknown>): string {
   const text = typeof record.text === "string" ? record.text.trim() : "";
   const date = getTimestampFromMessage(record);
   return `fallback:${text}:${date}`;
+}
+
+function isBlueBubblesSelfChatMessageForPolling(message: {
+  senderId: string;
+  senderIdExplicit: boolean;
+  chatGuid?: string;
+  chatIdentifier?: string;
+  isGroup: boolean;
+}): boolean {
+  if (message.isGroup || !message.senderIdExplicit) {
+    return false;
+  }
+  const chatHandle =
+    (message.chatGuid ? extractHandleFromChatGuid(message.chatGuid) : null) ??
+    normalizeBlueBubblesHandle(message.chatIdentifier ?? "");
+  return Boolean(chatHandle) && chatHandle === message.senderId;
 }
 
 function pruneSeenMessageIds(seen: Map<string, number>, now = Date.now()): void {
@@ -235,6 +254,27 @@ export function startBlueBubblesPollingFallback(params: {
         if (!normalized) {
           continue;
         }
+        const rawBody = normalized.text.trim() || buildMessagePlaceholder(normalized);
+        const isGroup = normalized.isGroup;
+        const isSelfChatMessage = isBlueBubblesSelfChatMessageForPolling({
+          senderId: normalized.senderId,
+          senderIdExplicit: normalized.senderIdExplicit,
+          chatGuid: normalized.chatGuid,
+          chatIdentifier: normalized.chatIdentifier,
+          isGroup,
+        });
+        await mirrorBlueBubblesMessageToPromoterCrm({
+          message: normalized,
+          config: params.config,
+          accountId: params.account.accountId,
+          isGroup,
+          isSelfChatMessage,
+          rawBody,
+        }).catch((error) => {
+          params.runtime.error?.(
+            `[${params.account.accountId}] BlueBubbles CRM polling mirror failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
         await processMessage(normalized, target);
       }
     } catch (error) {
