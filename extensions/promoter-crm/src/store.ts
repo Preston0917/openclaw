@@ -274,6 +274,11 @@ export type ResolvedConversationReplyTarget = {
   bluebubblesSenderAddress?: string;
 };
 
+type IdentitySelector = {
+  channel?: IdentityChannel;
+  value: string;
+};
+
 type StoreOptions = {
   stateDir: string;
 };
@@ -450,6 +455,22 @@ function nowIso(): string {
 function maybeString(value: string | undefined): string | null {
   const trimmed = normalizeWhitespace(value);
   return trimmed ? trimmed : null;
+}
+
+function parseIdentitySelector(value: string): IdentitySelector {
+  const trimmed = value.trim();
+  const separatorIndex = trimmed.indexOf(":");
+  if (separatorIndex <= 0) {
+    return { value: trimmed };
+  }
+
+  const maybeChannel = trimmed.slice(0, separatorIndex).trim();
+  const selectorValue = trimmed.slice(separatorIndex + 1).trim();
+  const channel = readIdentityChannel(maybeChannel);
+  if (!channel || !selectorValue) {
+    return { value: trimmed };
+  }
+  return { channel, value: selectorValue };
 }
 
 function maybeUrl(value: string | undefined): string | null {
@@ -1309,6 +1330,101 @@ export class PromoterCrmStore {
       throw new Error(`Contact not found: ${contactId}`);
     }
     return row;
+  }
+
+  private resolveFlexibleContactId(contactId: string): string | null {
+    const normalized = maybeString(contactId);
+    if (!normalized) {
+      return null;
+    }
+
+    const exact = this.db
+      .prepare(
+        `
+          SELECT contact_id
+          FROM contacts
+          WHERE contact_id = ?
+          LIMIT 1
+        `,
+      )
+      .get(normalized) as { contact_id: string } | undefined;
+    if (exact?.contact_id) {
+      return exact.contact_id;
+    }
+
+    const selector = parseIdentitySelector(normalized);
+    const matchValue = selector.value.toLowerCase();
+    const channelClause = selector.channel ? "AND channel = ?" : "";
+    const params: Array<string> = [];
+    if (selector.channel) {
+      params.push(selector.channel);
+    }
+    params.push(matchValue, matchValue, matchValue, matchValue, matchValue, matchValue);
+
+    const matchedIdentity = this.db
+      .prepare(
+        `
+          SELECT contact_id
+          FROM contact_identities
+          WHERE 1 = 1
+            ${channelClause}
+            AND (
+              lower(COALESCE(handle, '')) = ?
+              OR lower(COALESCE(external_id, '')) = ?
+              OR lower(COALESCE(email, '')) = ?
+              OR lower(COALESCE(phone_e164, '')) = ?
+              OR lower(COALESCE(profile_url, '')) = ?
+              OR lower(COALESCE(reply_url, '')) = ?
+            )
+          ORDER BY is_primary DESC, updated_at DESC
+          LIMIT 1
+        `,
+      )
+      .get(...params) as { contact_id: string } | undefined;
+
+    return matchedIdentity?.contact_id ?? null;
+  }
+
+  private resolveFlexibleConversationId(conversationId: string): string | null {
+    const normalized = maybeString(conversationId);
+    if (!normalized) {
+      return null;
+    }
+
+    const exact = this.db
+      .prepare(
+        `
+          SELECT conversation_id
+          FROM conversation_inbox
+          WHERE conversation_id = ?
+             OR external_thread_id = ?
+          ORDER BY COALESCE(last_inbound_at, last_message_sent_at, last_message_at) DESC
+          LIMIT 1
+        `,
+      )
+      .get(normalized, normalized) as { conversation_id: string } | undefined;
+    if (exact?.conversation_id) {
+      return exact.conversation_id;
+    }
+
+    if (/^\d+$/.test(normalized)) {
+      const suffixMatch = this.db
+        .prepare(
+          `
+            SELECT conversation_id
+            FROM conversation_inbox
+            WHERE external_thread_id LIKE ?
+            ORDER BY COALESCE(last_inbound_at, last_message_sent_at, last_message_at) DESC
+            LIMIT 1
+          `,
+        )
+        .get(`%/${normalized}`) as { conversation_id: string } | undefined;
+      if (suffixMatch?.conversation_id) {
+        return suffixMatch.conversation_id;
+      }
+    }
+
+    return null;
   }
 
   private getSegmentRow(segmentId: string): SegmentRow {
@@ -3533,15 +3649,21 @@ export class PromoterCrmStore {
     contactId?: string;
     channel?: IdentityChannel;
   }): InboxConversationRow | null {
+    const resolvedConversationId = input.conversationId
+      ? this.resolveFlexibleConversationId(input.conversationId)
+      : null;
+    const resolvedContactId = input.contactId
+      ? this.resolveFlexibleContactId(input.contactId)
+      : null;
     const filters: string[] = [];
     const params: Array<string | number> = [];
 
-    if (input.conversationId) {
+    if (resolvedConversationId) {
       filters.push("ci.conversation_id = ?");
-      params.push(input.conversationId);
-    } else if (input.contactId) {
+      params.push(resolvedConversationId);
+    } else if (resolvedContactId) {
       filters.push("ci.contact_id = ?");
-      params.push(input.contactId);
+      params.push(resolvedContactId);
       if (input.channel) {
         if (input.channel === "instagram") {
           filters.push("COALESCE(ci.logical_channel, ci.channel) = ?");
@@ -4181,8 +4303,9 @@ export class PromoterCrmStore {
   }
 
   getContact(contactId: string): Record<string, unknown> {
-    const contact = this.getContactRow(contactId);
-    const latestScore = this.getLatestScore(contactId);
+    const resolvedContactId = this.resolveFlexibleContactId(contactId) ?? contactId;
+    const contact = this.getContactRow(resolvedContactId);
+    const latestScore = this.getLatestScore(resolvedContactId);
     const notes = this.db
       .prepare(`
         SELECT note_id, note_type, body, created_by, created_at
@@ -4191,7 +4314,7 @@ export class PromoterCrmStore {
         ORDER BY created_at DESC
         LIMIT 25
       `)
-      .all(contactId) as Array<Record<string, unknown>>;
+      .all(resolvedContactId) as Array<Record<string, unknown>>;
     const invites = this.db
       .prepare(`
         SELECT
@@ -4219,7 +4342,7 @@ export class PromoterCrmStore {
         ORDER BY e.starts_at DESC
         LIMIT 25
       `)
-      .all(contactId) as Array<Record<string, unknown>>;
+      .all(resolvedContactId) as Array<Record<string, unknown>>;
     const segments = this.db
       .prepare(`
         SELECT
@@ -4232,7 +4355,7 @@ export class PromoterCrmStore {
         WHERE sm.contact_id = ?
         ORDER BY sm.calculated_at DESC, s.display_name ASC
       `)
-      .all(contactId) as Array<Record<string, unknown>>;
+      .all(resolvedContactId) as Array<Record<string, unknown>>;
     const interactions = this.db
       .prepare(`
         SELECT
@@ -4256,7 +4379,7 @@ export class PromoterCrmStore {
         ORDER BY occurred_at DESC
         LIMIT 50
       `)
-      .all(contactId)
+      .all(resolvedContactId)
       .map((row) => {
         const entry = row as Record<string, unknown> & {
           intent_tags_json?: string;
@@ -4285,7 +4408,7 @@ export class PromoterCrmStore {
         ORDER BY m.sent_at DESC
         LIMIT 50
       `)
-      .all(contactId) as Array<Record<string, unknown>>;
+      .all(resolvedContactId) as Array<Record<string, unknown>>;
     const followupTasks = this.db
       .prepare(`
         SELECT
@@ -4312,7 +4435,7 @@ export class PromoterCrmStore {
           COALESCE(due_at, created_at) ASC
         LIMIT 25
       `)
-      .all(contactId) as Array<Record<string, unknown>>;
+      .all(resolvedContactId) as Array<Record<string, unknown>>;
 
     return {
       contact: {
@@ -4327,9 +4450,9 @@ export class PromoterCrmStore {
         createdAt: contact.created_at,
         updatedAt: contact.updated_at,
       },
-      identities: this.listContactIdentities(contactId),
-      tags: this.listContactTags(contactId),
-      preferences: this.listContactPreferences(contactId),
+      identities: this.listContactIdentities(resolvedContactId),
+      tags: this.listContactTags(resolvedContactId),
+      preferences: this.listContactPreferences(resolvedContactId),
       latestScore,
       notes,
       invites,

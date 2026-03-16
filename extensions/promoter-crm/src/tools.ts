@@ -335,7 +335,10 @@ const LogInteractionSchema = Type.Object(
 
 const GetContactSchema = Type.Object(
   {
-    contactId: Type.String({ description: "Contact id to fetch." }),
+    contactId: Type.String({
+      description:
+        "Contact id to fetch. Also accepts identity selectors like instagram:handle or manychat:subscriberId.",
+    }),
   },
   { additionalProperties: false },
 );
@@ -373,10 +376,16 @@ const RecentInboxSchema = Type.Object(
 
 const GetConversationThreadSchema = Type.Object(
   {
-    conversationId: Type.Optional(Type.String({ description: "Conversation id to inspect." })),
+    conversationId: Type.Optional(
+      Type.String({
+        description:
+          "Conversation id to inspect. Also accepts external thread ids, including raw ManyChat thread ids.",
+      }),
+    ),
     contactId: Type.Optional(
       Type.String({
-        description: "Fallback contact id when you want the latest thread for a contact.",
+        description:
+          "Fallback contact id when you want the latest thread for a contact. Also accepts identity selectors like instagram:handle.",
       }),
     ),
     channel: Type.Optional(
@@ -404,12 +413,15 @@ const RankFollowupsSchema = Type.Object(
 const SendManychatReplySchema = Type.Object(
   {
     conversationId: Type.Optional(
-      Type.String({ description: "ManyChat conversation id to reply in." }),
+      Type.String({
+        description:
+          "ManyChat conversation id to reply in. Also accepts external thread ids, including raw ManyChat thread ids.",
+      }),
     ),
     contactId: Type.Optional(
       Type.String({
         description:
-          "Fallback contact id when replying to the latest ManyChat thread for a contact.",
+          "Fallback contact id when replying to the latest ManyChat thread for a contact. Also accepts identity selectors like instagram:handle or manychat:subscriberId.",
       }),
     ),
     channel: Type.Optional(
@@ -1032,37 +1044,35 @@ export function createPromoterCrmSendManychatReplyTool(api: OpenClawPluginApi): 
       const interactionId = `manychat-outbound-interaction-${randomUUID()}`;
       const summaryPreview = collapseWhitespace(typed.text, 120);
 
-      executeWithStore(api, (store) =>
-        {
-          const interaction = store.logInteraction({
-            interactionId,
-            contactId: target.contactId,
-            conversationId: target.conversationId,
-            channel: "manychat",
-            kind: "reply",
-            direction: "outbound",
-            summary: `ManyChat outbound reply: ${summaryPreview}`,
-            occurredAt,
-            messageExternalId,
-            messageStatus: "sent",
-            content: typed.text,
-            metadata: {
-              provider: "manychat",
-              endpoint: providerResult.endpoint,
-              responseStatus: providerResult.responseStatus,
-              responseBody: providerResult.responseBody,
-              requestBody: providerResult.requestBody,
-              subscriberId: target.subscriberId,
-              matchedChannel: target.matchedChannel,
-              replyUrl: target.replyUrl,
-              profileUrl: target.profileUrl,
-              instagramProfileUrl: target.instagramProfileUrl,
-            },
-          });
-          store.completeOpenFollowupTasks(target.contactId);
-          return interaction;
-        },
-      );
+      executeWithStore(api, (store) => {
+        const interaction = store.logInteraction({
+          interactionId,
+          contactId: target.contactId,
+          conversationId: target.conversationId,
+          channel: "manychat",
+          kind: "reply",
+          direction: "outbound",
+          summary: `ManyChat outbound reply: ${summaryPreview}`,
+          occurredAt,
+          messageExternalId,
+          messageStatus: "sent",
+          content: typed.text,
+          metadata: {
+            provider: "manychat",
+            endpoint: providerResult.endpoint,
+            responseStatus: providerResult.responseStatus,
+            responseBody: providerResult.responseBody,
+            requestBody: providerResult.requestBody,
+            subscriberId: target.subscriberId,
+            matchedChannel: target.matchedChannel,
+            replyUrl: target.replyUrl,
+            profileUrl: target.profileUrl,
+            instagramProfileUrl: target.instagramProfileUrl,
+          },
+        });
+        store.completeOpenFollowupTasks(target.contactId);
+        return interaction;
+      });
 
       return {
         content: [
