@@ -3771,9 +3771,10 @@
   display: grid;
   grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
   gap: 18px;
-  height: calc(100dvh - var(--topbar-height, 72px) - 72px);
-  max-height: calc(100dvh - var(--topbar-height, 72px) - 72px);
+  flex: 1 1 auto;
   min-height: 0;
+  height: 100%;
+  max-height: 100%;
   align-items: stretch;
   overflow: hidden;
 }

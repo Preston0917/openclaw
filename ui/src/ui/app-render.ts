@@ -30,6 +30,7 @@ import {
   updateConfigFormValue,
   removeConfigFormValue,
 } from "./controllers/config.ts";
+import { loadCrmInbox, loadCrmThread, logCrmManualReply, sendCrmReply } from "./controllers/crm.ts";
 import {
   loadCronRuns,
   loadMoreCronJobs,
@@ -63,12 +64,6 @@ import {
   saveExecApprovals,
   updateExecApprovalsFormValue,
 } from "./controllers/exec-approvals.ts";
-import {
-  loadCrmInbox,
-  loadCrmThread,
-  logCrmManualReply,
-  sendCrmReply,
-} from "./controllers/crm.ts";
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
@@ -335,6 +330,7 @@ export function renderApp(state: AppViewState) {
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
   const isChat = state.tab === "chat";
+  const isCrm = state.tab === "crm";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
@@ -568,7 +564,7 @@ export function renderApp(state: AppViewState) {
           : nothing
       }
       </div>
-      <main class="content ${isChat ? "content--chat" : ""}">
+      <main class="content ${isChat ? "content--chat" : ""} ${isCrm ? "content--crm" : ""}">
         ${
           state.updateAvailable &&
           state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion &&
@@ -709,11 +705,8 @@ export function renderApp(state: AppViewState) {
                   onSendReply: () => void sendCrmReply(state),
                   onLogReply: () => void logCrmManualReply(state),
                   onDraftInChat: () => {
-                    const contact = (state.crmThread?.contact ?? {}) as Record<string, unknown>;
-                    const conversation = (state.crmThread?.conversation ?? {}) as Record<
-                      string,
-                      unknown
-                    >;
+                    const contact = state.crmThread?.contact ?? {};
+                    const conversation = state.crmThread?.conversation ?? {};
                     const conversationId =
                       typeof conversation.conversationId === "string"
                         ? conversation.conversationId

@@ -825,6 +825,22 @@
   margin-top: 0;
 }
 
+.content--crm {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  overflow: hidden;
+  padding-bottom: 16px;
+}
+
+.content--crm > * + * {
+  margin-top: 0;
+}
+
+.content--crm .content-header {
+  flex: 0 0 auto;
+}
+
 /* Content header */
 .content-header {
   display: flex;
