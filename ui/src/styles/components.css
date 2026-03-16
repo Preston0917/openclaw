@@ -4062,9 +4062,11 @@
 
 .crm-composer__input {
   width: 100%;
-  min-height: 64px;
-  max-height: 140px;
-  resize: vertical;
+  min-height: 56px;
+  height: 56px;
+  max-height: 120px;
+  resize: none;
+  overflow-y: auto;
 }
 
 .crm-composer__actions {

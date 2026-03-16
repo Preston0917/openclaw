@@ -94,13 +94,15 @@ function resolveSelectedConversationId(
 
 export async function loadCrmInbox(
   state: CrmState,
-  opts?: { selectConversationId?: string | null; reloadThread?: boolean },
+  opts?: { selectConversationId?: string | null; reloadThread?: boolean; quiet?: boolean },
 ) {
   if (!state.client || !state.connected) {
     return;
   }
-  state.crmInboxLoading = true;
-  state.crmInboxError = null;
+  if (!opts?.quiet) {
+    state.crmInboxLoading = true;
+    state.crmInboxError = null;
+  }
   try {
     const result = await state.client.request<CrmInboxSnapshot>("promoter-crm.inbox.list", {
       channel: effectiveChannel(state.crmChannelFilter),
@@ -118,17 +120,22 @@ export async function loadCrmInbox(
     if (opts?.reloadThread === false) {
       return;
     }
-    await loadCrmThread(state, { conversationId: state.crmSelectedConversationId });
+    await loadCrmThread(state, {
+      conversationId: state.crmSelectedConversationId,
+      quiet: opts?.quiet,
+    });
   } catch (err) {
     state.crmInboxError = describeUiError(err);
   } finally {
-    state.crmInboxLoading = false;
+    if (!opts?.quiet) {
+      state.crmInboxLoading = false;
+    }
   }
 }
 
 export async function loadCrmThread(
   state: CrmState,
-  opts?: { conversationId?: string | null; contactId?: string | null },
+  opts?: { conversationId?: string | null; contactId?: string | null; quiet?: boolean },
 ) {
   if (!state.client || !state.connected) {
     return;
@@ -141,8 +148,10 @@ export async function loadCrmThread(
     state.crmThreadError = null;
     return;
   }
-  state.crmThreadLoading = true;
-  state.crmThreadError = null;
+  if (!opts?.quiet) {
+    state.crmThreadLoading = true;
+    state.crmThreadError = null;
+  }
   try {
     const thread = await state.client.request<CrmConversationThread>("promoter-crm.thread.get", {
       conversationId: conversationId ?? undefined,
@@ -161,7 +170,9 @@ export async function loadCrmThread(
   } catch (err) {
     state.crmThreadError = describeUiError(err);
   } finally {
-    state.crmThreadLoading = false;
+    if (!opts?.quiet) {
+      state.crmThreadLoading = false;
+    }
   }
 }
 

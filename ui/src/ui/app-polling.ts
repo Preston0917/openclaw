@@ -78,7 +78,7 @@ export function startCrmPolling(host: PollingHost) {
     if (host.tab !== "crm") {
       return;
     }
-    void loadCrmInbox(host as unknown as OpenClawApp);
+    void loadCrmInbox(host as unknown as OpenClawApp, { quiet: true });
   }, 4000);
 }
 
