@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { GatewayRequestHandlerOptions, OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { ErrorCodes, errorShape } from "../../../src/gateway/protocol/index.js";
+import { sendMessageBlueBubbles } from "../../bluebubbles/src/send.js";
 import { syncBlueBubblesIntoPromoterCrm } from "./bluebubbles-live-sync.js";
 import { sendManychatText } from "./manychat-api.js";
 import type { IdentityChannel } from "./store.js";
@@ -26,6 +27,17 @@ function normalizeWhitespace(value: unknown): string {
 function maybeString(value: unknown): string | undefined {
   const normalized = normalizeWhitespace(value);
   return normalized || undefined;
+}
+
+function sanitizeProviderMessageId(value: unknown): string | undefined {
+  const normalized = maybeString(value);
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "ok" || normalized === "unknown") {
+    return undefined;
+  }
+  return normalized;
 }
 
 function parseIdentityChannel(value: unknown): IdentityChannel | undefined {
@@ -230,15 +242,6 @@ export function registerPromoterCrmGatewayMethods(api: OpenClawPluginApi): void 
           return;
         }
 
-        const apiKey = process.env.MANYCHAT_API_KEY?.trim();
-        if (!apiKey) {
-          sendInvalidRequest(
-            respond,
-            "MANYCHAT_API_KEY is not configured for the OpenClaw gateway.",
-          );
-          return;
-        }
-
         const conversationId = maybeString(params.conversationId);
         const contactId = maybeString(params.contactId);
         if (!conversationId && !contactId) {
@@ -247,79 +250,171 @@ export function registerPromoterCrmGatewayMethods(api: OpenClawPluginApi): void 
         }
 
         const target = await withPromoterCrmStore({ stateDir: resolveStateDir(api) }, (store) =>
-          store.resolveManychatReplyTarget({
+          store.resolveConversationReplyTarget({
             conversationId,
             contactId,
             channel: parseIdentityChannel(params.channel),
           }),
         );
 
-        const providerResult = await sendManychatText({
-          apiKey,
-          subscriberId: Number(target.subscriberId),
-          text,
-          contentType: target.matchedChannel === "instagram" ? "instagram" : undefined,
-          messageTag: maybeString(params.messageTag),
-          otnTopicName: maybeString(params.otnTopicName),
-        });
-
         const occurredAt = new Date().toISOString();
-        const messageExternalId = `manychat-outbound-${randomUUID()}`;
-        const interactionId = `manychat-outbound-interaction-${randomUUID()}`;
 
-        const result = await withPromoterCrmStore({ stateDir: resolveStateDir(api) }, (store) => {
-          store.logInteraction({
-            interactionId,
-            contactId: target.contactId,
-            conversationId: target.conversationId,
-            channel: "manychat",
-            logicalChannel: target.matchedChannel,
-            transport: "manychat",
-            conversationRole: "crm",
-            kind: "reply",
-            direction: "outbound",
-            actorRole: "user",
-            authorshipMode: "assistant_send",
-            summary: `ManyChat outbound reply: ${collapseWhitespace(text)}`,
-            occurredAt,
-            messageExternalId,
-            messageStatus: "sent",
-            content: text,
-            metadata: {
-              source: "control_ui_manychat_send",
-              provider: "manychat",
-              endpoint: providerResult.endpoint,
-              responseStatus: providerResult.responseStatus,
-              responseBody: providerResult.responseBody,
-              requestBody: providerResult.requestBody,
-              subscriberId: target.subscriberId,
+        let result: Record<string, unknown>;
+        if (target.transport === "manychat") {
+          const apiKey = process.env.MANYCHAT_API_KEY?.trim();
+          if (!apiKey) {
+            sendInvalidRequest(
+              respond,
+              "MANYCHAT_API_KEY is not configured for the OpenClaw gateway.",
+            );
+            return;
+          }
+
+          const providerResult = await sendManychatText({
+            apiKey,
+            subscriberId: Number(target.subscriberId),
+            text,
+            contentType: target.matchedChannel === "instagram" ? "instagram" : undefined,
+            messageTag: maybeString(params.messageTag),
+            otnTopicName: maybeString(params.otnTopicName),
+          });
+          const messageExternalId = `manychat-outbound-${randomUUID()}`;
+          const interactionId = `manychat-outbound-interaction-${randomUUID()}`;
+
+          result = await withPromoterCrmStore({ stateDir: resolveStateDir(api) }, (store) => {
+            store.logInteraction({
+              interactionId,
+              contactId: target.contactId,
+              conversationId: target.conversationId,
+              channel: "manychat",
+              logicalChannel: target.matchedChannel,
+              transport: "manychat",
+              conversationRole: "crm",
+              kind: "reply",
+              direction: "outbound",
+              actorRole: "user",
+              authorshipMode: "assistant_send",
+              summary: `ManyChat outbound reply: ${collapseWhitespace(text)}`,
+              occurredAt,
+              messageExternalId,
+              messageStatus: "sent",
+              content: text,
+              metadata: {
+                source: "control_ui_manychat_send",
+                provider: "manychat",
+                endpoint: providerResult.endpoint,
+                responseStatus: providerResult.responseStatus,
+                responseBody: providerResult.responseBody,
+                requestBody: providerResult.requestBody,
+                subscriberId: target.subscriberId,
+                matchedChannel: target.matchedChannel,
+                replyUrl: target.replyUrl,
+                profileUrl: target.profileUrl,
+                instagramProfileUrl: target.instagramProfileUrl,
+              },
+            });
+            const followups = store.completeOpenFollowupTasks(target.contactId);
+            return {
+              ok: true,
+              contactId: target.contactId,
+              contactName: target.contactName,
+              conversationId: target.conversationId,
+              interactionId,
+              messageExternalId,
+              sentAt: occurredAt,
+              text,
               matchedChannel: target.matchedChannel,
               replyUrl: target.replyUrl,
               profileUrl: target.profileUrl,
               instagramProfileUrl: target.instagramProfileUrl,
-            },
+              closedFollowupTasks: followups.updatedCount,
+              providerResult,
+            };
           });
-          const followups = store.completeOpenFollowupTasks(target.contactId);
-          return {
-            ok: true,
-            contactId: target.contactId,
-            contactName: target.contactName,
-            conversationId: target.conversationId,
-            interactionId,
-            messageExternalId,
-            sentAt: occurredAt,
+        } else if (target.transport === "bluebubbles") {
+          const providerResult = await sendMessageBlueBubbles(
+            target.bluebubblesTarget ?? "",
             text,
-            matchedChannel: target.matchedChannel,
-            replyUrl: target.replyUrl,
-            profileUrl: target.profileUrl,
-            instagramProfileUrl: target.instagramProfileUrl,
-            closedFollowupTasks: followups.updatedCount,
-            providerResult,
-          };
-        });
+            {
+              cfg: api.config,
+            },
+          );
+          const providerMessageId = sanitizeProviderMessageId(providerResult.messageId);
+
+          result = await withPromoterCrmStore({ stateDir: resolveStateDir(api) }, (store) => {
+            let interactionId = `bluebubbles-outbound-interaction-${randomUUID()}`;
+            let messageExternalId = providerMessageId ?? `bluebubbles-outbound-${randomUUID()}`;
+            let resolvedConversationId = target.conversationId;
+
+            if (providerMessageId) {
+              const logged = store.logBlueBubblesLiveMessage({
+                accountId: "default",
+                senderAddress:
+                  target.bluebubblesSenderAddress ?? target.bluebubblesTarget ?? target.contactName,
+                senderDisplayName: target.contactName,
+                externalThreadId:
+                  target.externalThreadId ?? target.bluebubblesTarget ?? target.contactName,
+                externalMessageId: providerMessageId,
+                direction: "outbound",
+                occurredAt,
+                status: "sent",
+                content: text,
+                createdBy: "control_ui_bluebubbles_send",
+                metadata: {
+                  source: "control_ui_bluebubbles_send",
+                  provider: "bluebubbles",
+                  messageId: providerResult.messageId,
+                  bluebubblesTarget: target.bluebubblesTarget,
+                  matchedChannel: target.matchedChannel,
+                  replyUrl: target.replyUrl,
+                  profileUrl: target.profileUrl,
+                  instagramProfileUrl: target.instagramProfileUrl,
+                },
+              });
+              interactionId = logged.interactionId;
+              resolvedConversationId = logged.conversationId ?? resolvedConversationId;
+              messageExternalId = providerMessageId;
+            }
+
+            const followups = store.completeOpenFollowupTasks(target.contactId);
+            return {
+              ok: true,
+              contactId: target.contactId,
+              contactName: target.contactName,
+              conversationId: resolvedConversationId,
+              interactionId,
+              messageExternalId,
+              sentAt: occurredAt,
+              text,
+              matchedChannel: target.matchedChannel,
+              replyUrl: target.replyUrl,
+              profileUrl: target.profileUrl,
+              instagramProfileUrl: target.instagramProfileUrl,
+              closedFollowupTasks: followups.updatedCount,
+              providerResult,
+            };
+          });
+
+          if (!providerMessageId) {
+            await syncBlueBubblesIntoPromoterCrm({ api, channel: "imessage" }).catch((err) => {
+              api.logger.warn("promoter-crm: bluebubbles post-send sync skipped", {
+                contactId: target.contactId,
+                conversationId: target.conversationId,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            });
+          }
+        } else {
+          sendInvalidRequest(
+            respond,
+            `Direct send is not enabled for CRM transport ${String(target.transport)}.`,
+          );
+          return;
+        }
+
         respond(true, result);
       } catch (err) {
-        sendError(respond, err, "Failed to send promoter CRM ManyChat reply.");
+        sendError(respond, err, "Failed to send promoter CRM reply.");
       }
     },
   );

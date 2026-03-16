@@ -257,6 +257,23 @@ export type ResolveManychatReplyTargetInput = {
   channel?: IdentityChannel;
 };
 
+export type ResolveConversationReplyTargetInput = ResolveManychatReplyTargetInput;
+
+export type ResolvedConversationReplyTarget = {
+  contactId: string;
+  contactName: string;
+  conversationId: string;
+  externalThreadId: string | null;
+  matchedChannel: IdentityChannel;
+  replyUrl: string | null;
+  profileUrl: string | null;
+  instagramProfileUrl: string | null;
+  transport: "manychat" | "bluebubbles";
+  subscriberId?: string;
+  bluebubblesTarget?: string;
+  bluebubblesSenderAddress?: string;
+};
+
 type StoreOptions = {
   stateDir: string;
 };
@@ -4002,6 +4019,138 @@ export class PromoterCrmStore {
     };
   }
 
+  resolveConversationReplyTarget(
+    input: ResolveConversationReplyTargetInput,
+  ): ResolvedConversationReplyTarget {
+    if (!input.conversationId && !input.contactId) {
+      throw new Error("Provide conversationId or contactId to resolve a CRM reply target.");
+    }
+
+    const thread = this.getConversationThread({
+      conversationId: input.conversationId,
+      contactId: input.contactId,
+      channel: input.channel,
+      limit: 1,
+    });
+    const identities = thread.identities;
+    const conversation = thread.conversation as Record<string, unknown>;
+    const contact = thread.contact as Record<string, unknown>;
+    const contactId = typeof contact.contactId === "string" ? contact.contactId : "";
+    const contactName =
+      (typeof contact.displayName === "string" && contact.displayName.trim()) || contactId;
+    const conversationId =
+      typeof conversation.conversationId === "string" ? conversation.conversationId : "";
+    const baseChannel =
+      (typeof conversation.channel === "string" &&
+        readIdentityChannel(conversation.channel as IdentityChannel)) ||
+      "manychat";
+    const transportValue =
+      (typeof conversation.transport === "string" && conversation.transport.trim()) || "";
+    const resolvedTransport = resolveConversationTransport(baseChannel, transportValue);
+    const inferredInstagramChannel = contactHasIdentityChannel(identities, "instagram");
+    const resolvedMatchedChannel =
+      typeof conversation.matchedChannel === "string"
+        ? readIdentityChannel(conversation.matchedChannel as IdentityChannel)
+        : null;
+    const matchedChannel = inferredInstagramChannel
+      ? "instagram"
+      : (resolvedMatchedChannel ??
+        (resolvedTransport === "bluebubbles" ? "imessage" : baseChannel));
+    const externalThreadIdRaw =
+      (typeof conversation.externalThreadId === "string" && conversation.externalThreadId) ||
+      (typeof conversation.replyUrl === "string" && conversation.replyUrl) ||
+      undefined;
+    const replyUrlRaw =
+      (typeof conversation.replyUrl === "string" && conversation.replyUrl) || undefined;
+    const profileUrlRaw =
+      (typeof conversation.profileUrl === "string" && conversation.profileUrl) || undefined;
+    const instagramProfileUrl =
+      chooseChannelIdentityUrl(identities, "instagram", "profile_url") ??
+      chooseChannelIdentityUrl(identities, "instagram", "reply_url");
+    const externalThreadId = maybeString(externalThreadIdRaw) ?? null;
+    const baseTarget = {
+      contactId,
+      contactName,
+      conversationId,
+      externalThreadId,
+      matchedChannel,
+      replyUrl:
+        maybeString(replyUrlRaw) ??
+        choosePreferredIdentityUrl(identities, baseChannel, "reply_url"),
+      profileUrl:
+        maybeString(profileUrlRaw) ??
+        choosePreferredIdentityUrl(identities, baseChannel, "profile_url"),
+      instagramProfileUrl: instagramProfileUrl ?? null,
+    };
+
+    if (resolvedTransport === "manychat") {
+      const manychatIdentity =
+        identities.find((identity) => identity.channel === "manychat") ?? null;
+      if (!manychatIdentity) {
+        throw new Error("No ManyChat identity is linked to this contact.");
+      }
+
+      const subscriberId =
+        maybeString(
+          readMetadataText(manychatIdentity, ["external_id", "externalId", "subscriber_id"]),
+        ) ?? null;
+      if (!subscriberId || !/^\d+$/.test(subscriberId)) {
+        throw new Error("ManyChat subscriber id is missing or invalid for this contact.");
+      }
+
+      return {
+        ...baseTarget,
+        transport: "manychat",
+        subscriberId,
+      };
+    }
+
+    if (resolvedTransport === "bluebubbles") {
+      const imessageIdentity =
+        identities.find((identity) => identity.channel === "imessage") ?? null;
+      const bluebubblesSenderAddress =
+        maybeString(
+          readMetadataText(imessageIdentity, [
+            "external_id",
+            "externalId",
+            "phone_e164",
+            "phoneE164",
+            "email",
+            "handle",
+          ]),
+        ) ?? null;
+      const bluebubblesTarget =
+        externalThreadId ??
+        maybeString(
+          readMetadataText(imessageIdentity, [
+            "reply_url",
+            "replyUrl",
+            "external_id",
+            "externalId",
+            "phone_e164",
+            "phoneE164",
+            "email",
+            "handle",
+          ]),
+        ) ??
+        bluebubblesSenderAddress;
+      if (!bluebubblesTarget) {
+        throw new Error("No BlueBubbles reply target is linked to this contact.");
+      }
+
+      return {
+        ...baseTarget,
+        transport: "bluebubbles",
+        bluebubblesTarget,
+        bluebubblesSenderAddress: bluebubblesSenderAddress ?? bluebubblesTarget,
+      };
+    }
+
+    throw new Error(
+      `This conversation transport is not supported for direct CRM send (${resolvedTransport}).`,
+    );
+  }
+
   resolveManychatReplyTarget(input: ResolveManychatReplyTargetInput): {
     contactId: string;
     contactName: string;
@@ -4013,85 +4162,21 @@ export class PromoterCrmStore {
     profileUrl: string | null;
     instagramProfileUrl: string | null;
   } {
-    if (!input.conversationId && !input.contactId) {
-      throw new Error("Provide conversationId or contactId to resolve a ManyChat reply target.");
-    }
-
-    const thread = this.getConversationThread({
-      conversationId: input.conversationId,
-      contactId: input.contactId,
-      channel: input.channel,
-      limit: 1,
-    });
-    const identities = thread.identities;
-    const manychatIdentity = identities.find((identity) => identity.channel === "manychat") ?? null;
-    if (!manychatIdentity) {
-      throw new Error("No ManyChat identity is linked to this contact.");
-    }
-
-    const subscriberId =
-      maybeString(
-        typeof manychatIdentity.external_id === "string"
-          ? manychatIdentity.external_id
-          : typeof manychatIdentity.externalId === "string"
-            ? manychatIdentity.externalId
-            : undefined,
-      ) ?? null;
-    if (!subscriberId || !/^\d+$/.test(subscriberId)) {
-      throw new Error("ManyChat subscriber id is missing or invalid for this contact.");
-    }
-
-    const instagramProfileUrl =
-      chooseChannelIdentityUrl(identities, "instagram", "profile_url") ??
-      chooseChannelIdentityUrl(identities, "instagram", "reply_url");
-    const conversation = thread.conversation as Record<string, unknown>;
-    const contact = thread.contact as Record<string, unknown>;
-    const contactId = typeof contact.contactId === "string" ? contact.contactId : "";
-    const contactName =
-      (typeof contact.displayName === "string" && contact.displayName.trim()) || contactId;
-    const conversationId =
-      typeof conversation.conversationId === "string" ? conversation.conversationId : "";
-    const transportValue =
-      (typeof conversation.transport === "string" && conversation.transport.trim()) || "";
-    const transportChannel =
-      transportValue === "manychat"
-        ? "manychat"
-        : (typeof conversation.channel === "string" &&
-            readIdentityChannel(conversation.channel as IdentityChannel)) ||
-          "manychat";
-    if (transportChannel !== "manychat") {
+    const target = this.resolveConversationReplyTarget(input);
+    if (target.transport !== "manychat" || !target.subscriberId) {
       throw new Error("This conversation is not backed by ManyChat transport.");
     }
-    const inferredInstagramChannel = contactHasIdentityChannel(identities, "instagram");
-    const resolvedMatchedChannel =
-      typeof conversation.matchedChannel === "string"
-        ? readIdentityChannel(conversation.matchedChannel as IdentityChannel)
-        : null;
-    const matchedChannel = inferredInstagramChannel
-      ? "instagram"
-      : (resolvedMatchedChannel ?? transportChannel);
-    const externalThreadIdRaw =
-      (typeof conversation.externalThreadId === "string" && conversation.externalThreadId) ||
-      (typeof conversation.replyUrl === "string" && conversation.replyUrl) ||
-      undefined;
-    const replyUrlRaw =
-      (typeof conversation.replyUrl === "string" && conversation.replyUrl) || undefined;
-    const profileUrlRaw =
-      (typeof conversation.profileUrl === "string" && conversation.profileUrl) || undefined;
 
     return {
-      contactId,
-      contactName,
-      conversationId,
-      externalThreadId: maybeString(externalThreadIdRaw) ?? null,
-      subscriberId,
-      matchedChannel,
-      replyUrl:
-        maybeString(replyUrlRaw) ?? choosePreferredIdentityUrl(identities, "manychat", "reply_url"),
-      profileUrl:
-        maybeString(profileUrlRaw) ??
-        choosePreferredIdentityUrl(identities, "manychat", "profile_url"),
-      instagramProfileUrl: instagramProfileUrl ?? null,
+      contactId: target.contactId,
+      contactName: target.contactName,
+      conversationId: target.conversationId,
+      externalThreadId: target.externalThreadId,
+      subscriberId: target.subscriberId,
+      matchedChannel: target.matchedChannel,
+      replyUrl: target.replyUrl,
+      profileUrl: target.profileUrl,
+      instagramProfileUrl: target.instagramProfileUrl,
     };
   }
 

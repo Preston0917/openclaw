@@ -375,7 +375,9 @@ export function renderCrm(props: CrmProps) {
   const conversation = props.thread?.conversation;
   const canSend =
     stringifyValue(conversation?.transport) === "manychat" ||
-    stringifyValue(conversation?.channel) === "manychat";
+    stringifyValue(conversation?.transport) === "bluebubbles" ||
+    stringifyValue(conversation?.channel) === "manychat" ||
+    stringifyValue(conversation?.channel) === "imessage";
   const needsReply = conversation?.needsReply === true;
   const followupTasks = Array.isArray(props.thread?.followupTasks)
     ? props.thread.followupTasks
@@ -536,8 +538,8 @@ export function renderCrm(props: CrmProps) {
                     !canSend
                       ? html`
                           <div class="crm-composer__hint">
-                            Direct send is only enabled for ManyChat-backed threads right now. The same ledger can back
-                            WhatsApp and iMessage later.
+                            Direct send is enabled for ManyChat and iMessage-backed threads right now. Other CRM transports
+                            still use manual logging until they get a send connector.
                           </div>
                         `
                       : nothing
