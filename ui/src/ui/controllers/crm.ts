@@ -34,6 +34,7 @@ export type CrmConversationThread = {
   tags: string[];
   latestScore: Record<string, unknown> | null;
   conversation: Record<string, unknown>;
+  conversationTabs?: Array<Record<string, unknown>>;
   messages: Array<Record<string, unknown>>;
   interactions: Array<Record<string, unknown>>;
   followupTasks: Array<Record<string, unknown>>;

@@ -1,8 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type {
-  GatewayRequestHandlerOptions,
-  OpenClawPluginApi,
-} from "openclaw/plugin-sdk/core";
+import type { GatewayRequestHandlerOptions, OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { ErrorCodes, errorShape } from "../../../src/gateway/protocol/index.js";
 import { sendManychatText } from "./manychat-api.js";
 import type { IdentityChannel } from "./store.js";
@@ -40,12 +37,7 @@ function parseIdentityChannel(value: unknown): IdentityChannel | undefined {
     : undefined;
 }
 
-function parseBoundedInteger(
-  value: unknown,
-  min: number,
-  max: number,
-  fallback: number,
-): number {
+function parseBoundedInteger(value: unknown, min: number, max: number, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.max(min, Math.min(Math.floor(value), max))
     : fallback;
@@ -166,8 +158,20 @@ export function registerPromoterCrmGatewayMethods(api: OpenClawPluginApi): void 
               typeof conversation.channel === "string"
                 ? (conversation.channel as IdentityChannel)
                 : undefined,
+            logicalChannel:
+              typeof conversation.logicalChannel === "string"
+                ? (conversation.logicalChannel as IdentityChannel)
+                : undefined,
+            transport:
+              typeof conversation.transport === "string" ? conversation.transport : undefined,
+            conversationRole:
+              typeof conversation.conversationRole === "string"
+                ? conversation.conversationRole
+                : undefined,
             kind: "reply",
             direction: "outbound",
+            actorRole: "user",
+            authorshipMode: "manual_user",
             summary: `Manual outbound reply: ${collapseWhitespace(text)}`,
             occurredAt,
             messageStatus: "logged",
@@ -252,8 +256,13 @@ export function registerPromoterCrmGatewayMethods(api: OpenClawPluginApi): void 
             contactId: target.contactId,
             conversationId: target.conversationId,
             channel: "manychat",
+            logicalChannel: target.matchedChannel,
+            transport: "manychat",
+            conversationRole: "crm",
             kind: "reply",
             direction: "outbound",
+            actorRole: "user",
+            authorshipMode: "assistant_send",
             summary: `ManyChat outbound reply: ${collapseWhitespace(text)}`,
             occurredAt,
             messageExternalId,

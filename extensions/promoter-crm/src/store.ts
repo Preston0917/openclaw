@@ -2,6 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import {
+  parseBlueBubblesChatQueryPayload,
+  parseBlueBubblesMessageQueryPayload,
+} from "./bluebubbles-import.js";
 import { mapCsvRowToContactInput, parseCsvRows } from "./csv-import.js";
 import { parseManychatPayload } from "./manychat-import.js";
 import { ensurePromoterCrmSchema, PROMOTER_CRM_TABLES } from "./schema.js";
@@ -22,11 +26,14 @@ export type IdentityChannel =
 export type ContactPreferenceCategory = "venue" | "music" | "borough" | "vibe";
 export type ContactPreferenceMode = "prefer" | "avoid";
 export type ContactQualityTier = "prospect" | "warm" | "regular" | "vip" | "table";
+export type IdentityRole = "owner" | "lead" | "friend" | "venue" | "unknown";
 export type EventStatus = "planned" | "live" | "completed" | "canceled";
 export type CampaignStatus = "draft" | "active" | "paused" | "completed" | "archived";
 export type InviteStatus = "draft" | "invited" | "confirmed" | "tentative" | "declined";
 export type RsvpStatus = "unknown" | "pending" | "yes" | "no" | "maybe";
 export type AttendanceResult = "unknown" | "attended" | "flaked" | "late";
+export type ConversationRole = "crm" | "control" | "personal" | "ops";
+export type ConversationTransport = "manychat" | "bluebubbles" | "manual" | "other";
 export type IngestSource =
   | "manual"
   | "google_contacts"
@@ -45,6 +52,13 @@ export type InteractionKind =
   | "summary"
   | "campaign";
 export type Direction = "inbound" | "outbound";
+export type MessageActorRole = "user" | "contact" | "assistant" | "system";
+export type MessageAuthorshipMode =
+  | "manual_user"
+  | "assistant_send"
+  | "assistant_draft"
+  | "assistant_chat"
+  | "connector_import";
 export type FollowupTaskStatus = "open" | "done" | "dismissed";
 
 export type ContactIdentityInput = {
@@ -56,6 +70,7 @@ export type ContactIdentityInput = {
   profileUrl?: string;
   replyUrl?: string;
   avatarUrl?: string;
+  identityRole?: IdentityRole;
   source?: string;
   isPrimary?: boolean;
   confidence?: number;
@@ -146,8 +161,13 @@ export type LogInteractionInput = {
   eventId?: string;
   campaignId?: string;
   channel?: IdentityChannel;
+  logicalChannel?: IdentityChannel;
+  transport?: ConversationTransport;
+  conversationRole?: ConversationRole;
   kind: InteractionKind;
   direction?: Direction;
+  actorRole?: MessageActorRole;
+  authorshipMode?: MessageAuthorshipMode;
   sentiment?: string;
   summary: string;
   outcome?: string;
@@ -212,6 +232,14 @@ export type ImportCsvInput = {
 
 export type ImportManychatInput = {
   payload: unknown;
+  fileName?: string;
+  sourceLabel?: string;
+  initiatedBy?: string;
+};
+
+export type ImportBlueBubblesInput = {
+  payload: unknown;
+  chatPayload?: unknown;
   fileName?: string;
   sourceLabel?: string;
   initiatedBy?: string;
@@ -304,6 +332,9 @@ type InboxConversationRow = {
   quality_tier: ContactQualityTier | null;
   latest_score: number | null;
   channel: IdentityChannel;
+  logical_channel: IdentityChannel | null;
+  transport: ConversationTransport | null;
+  conversation_role: ConversationRole | null;
   external_thread_id: string | null;
   conversation_status: "active" | "archived";
   started_at: string;
@@ -328,6 +359,8 @@ type ConversationMessageRow = {
   message_id: string;
   external_message_id: string | null;
   direction: Direction;
+  actor_role: MessageActorRole | null;
+  authorship_mode: MessageAuthorshipMode | null;
   status: string | null;
   content: string | null;
   sent_at: string;
@@ -363,6 +396,14 @@ function normalizeHandle(value: string | undefined): string {
 
 function normalizeEmail(value: string | undefined): string {
   return normalizeLower(value);
+}
+
+function isNormalizedEmail(value: string): boolean {
+  return Boolean(value) && value.includes("@");
+}
+
+function isNormalizedPhone(value: string): boolean {
+  return Boolean(value) && /^\+?\d{7,}$/.test(value);
 }
 
 function normalizeIdentityValue(identity: ContactIdentityInput): string {
@@ -571,12 +612,63 @@ function contactHasIdentityChannel(
   return identities.some((entry) => readIdentityChannel(entry.channel) === channel);
 }
 
+function inferConversationLogicalChannel(params: {
+  identities: Array<Record<string, unknown>>;
+  transportChannel: IdentityChannel;
+  requestedChannel?: IdentityChannel;
+  storedLogicalChannel?: IdentityChannel | null;
+}): IdentityChannel {
+  const stored = params.storedLogicalChannel
+    ? readIdentityChannel(params.storedLogicalChannel)
+    : null;
+  if (stored) {
+    return stored;
+  }
+  const requested = params.requestedChannel ? readIdentityChannel(params.requestedChannel) : null;
+  if (requested) {
+    return requested;
+  }
+  if (
+    params.transportChannel === "manychat" &&
+    contactHasIdentityChannel(params.identities, "instagram")
+  ) {
+    return "instagram";
+  }
+  return params.transportChannel;
+}
+
+function resolveConversationTransport(
+  transportChannel: IdentityChannel,
+  storedTransport?: ConversationTransport | string | null,
+): ConversationTransport {
+  const normalized = typeof storedTransport === "string" ? storedTransport.trim() : "";
+  if (
+    normalized === "manychat" ||
+    normalized === "bluebubbles" ||
+    normalized === "manual" ||
+    normalized === "other"
+  ) {
+    return normalized;
+  }
+  if (transportChannel === "manychat") {
+    return "manychat";
+  }
+  if (transportChannel === "imessage") {
+    return "bluebubbles";
+  }
+  return "other";
+}
+
 function describeConversationChannelContext(
   identities: Array<Record<string, unknown>>,
   transportChannel: IdentityChannel,
   requestedChannel?: IdentityChannel,
+  storedLogicalChannel?: IdentityChannel | null,
+  storedTransport?: ConversationTransport | string | null,
 ): {
   matchedChannel: IdentityChannel;
+  logicalChannel: IdentityChannel;
+  transport: ConversationTransport;
   channelLabel: string;
   primaryIdentity: Record<string, unknown> | null;
   replyUrl: string | null;
@@ -584,14 +676,19 @@ function describeConversationChannelContext(
 } {
   const requested = requestedChannel ? readIdentityChannel(requestedChannel) : null;
   const transport = readIdentityChannel(transportChannel);
-  const instagramViaManychat =
-    requested === "instagram" &&
-    transport === "manychat" &&
-    contactHasIdentityChannel(identities, "instagram");
+  const logicalChannel = inferConversationLogicalChannel({
+    identities,
+    transportChannel: transport,
+    requestedChannel,
+    storedLogicalChannel,
+  });
+  const resolvedTransport = resolveConversationTransport(transport, storedTransport);
 
-  if (instagramViaManychat) {
+  if (logicalChannel === "instagram" && resolvedTransport === "manychat") {
     return {
-      matchedChannel: "instagram",
+      matchedChannel: requested ?? logicalChannel,
+      logicalChannel,
+      transport: resolvedTransport,
       channelLabel: "instagram via manychat",
       primaryIdentity: chooseConversationIdentity(identities, "instagram"),
       replyUrl:
@@ -604,10 +701,18 @@ function describeConversationChannelContext(
     };
   }
 
-  const preferredChannel = requested ?? transport;
+  const preferredChannel = requested ?? logicalChannel;
+  const channelLabel =
+    logicalChannel === "imessage" && resolvedTransport === "bluebubbles"
+      ? "imessage"
+      : logicalChannel === transport
+        ? logicalChannel
+        : `${logicalChannel} via ${resolvedTransport}`;
   return {
     matchedChannel: preferredChannel,
-    channelLabel: transport,
+    logicalChannel,
+    transport: resolvedTransport,
+    channelLabel,
     primaryIdentity: chooseConversationIdentity(identities, preferredChannel),
     replyUrl: choosePreferredIdentityUrl(identities, transport, "reply_url"),
     profileUrl: choosePreferredIdentityUrl(identities, preferredChannel, "profile_url"),
@@ -796,6 +901,8 @@ export class PromoterCrmStore {
     this.db = new DatabaseSync(paths.dbPath);
     ensurePromoterCrmSchema(this.db);
     this.backfillIdentityLinksFromInteractionMetadata();
+    this.backfillConversationSemantics();
+    this.backfillMessageSemantics();
   }
 
   close(): void {
@@ -947,13 +1054,14 @@ export class PromoterCrmStore {
           profile_url,
           reply_url,
           avatar_url,
+          identity_role,
           normalized_value,
           source,
           is_primary,
           confidence,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(channel, normalized_value) DO UPDATE SET
           contact_id = excluded.contact_id,
           external_id = COALESCE(excluded.external_id, contact_identities.external_id),
@@ -963,6 +1071,7 @@ export class PromoterCrmStore {
           profile_url = COALESCE(contact_identities.profile_url, excluded.profile_url),
           reply_url = COALESCE(contact_identities.reply_url, excluded.reply_url),
           avatar_url = COALESCE(contact_identities.avatar_url, excluded.avatar_url),
+          identity_role = COALESCE(contact_identities.identity_role, excluded.identity_role),
           source = COALESCE(excluded.source, contact_identities.source),
           confidence = COALESCE(excluded.confidence, contact_identities.confidence),
           updated_at = excluded.updated_at
@@ -978,6 +1087,7 @@ export class PromoterCrmStore {
         maybeUrl(identity.profileUrl),
         maybeUrl(identity.replyUrl),
         maybeUrl(identity.avatarUrl),
+        identity.identityRole ?? "lead",
         normalizedValue,
         maybeString(identity.source),
         isPrimary,
@@ -1070,6 +1180,73 @@ export class PromoterCrmStore {
           source: "manychat",
         });
       }
+    }
+  }
+
+  private backfillConversationSemantics(): void {
+    this.db
+      .prepare(`
+        UPDATE contact_identities
+        SET identity_role = COALESCE(identity_role, 'lead')
+        WHERE identity_role IS NULL OR TRIM(identity_role) = ''
+      `)
+      .run();
+
+    this.db
+      .prepare(`
+        UPDATE conversations
+        SET
+          logical_channel = CASE
+            WHEN logical_channel IS NOT NULL AND TRIM(logical_channel) <> '' THEN logical_channel
+            WHEN channel = 'manychat' AND EXISTS (
+              SELECT 1
+              FROM contact_identities ci
+              WHERE ci.contact_id = conversations.contact_id
+                AND ci.channel = 'instagram'
+            ) THEN 'instagram'
+            ELSE channel
+          END,
+          transport = CASE
+            WHEN transport IS NOT NULL AND TRIM(transport) <> '' THEN transport
+            WHEN channel = 'manychat' THEN 'manychat'
+            WHEN channel = 'imessage' THEN 'bluebubbles'
+            ELSE 'other'
+          END,
+          conversation_role = COALESCE(NULLIF(TRIM(conversation_role), ''), 'crm')
+      `)
+      .run();
+  }
+
+  private backfillMessageSemantics(): void {
+    const rows = this.db
+      .prepare(`
+        SELECT message_id, direction, metadata_json
+        FROM messages
+        WHERE actor_role IS NULL OR authorship_mode IS NULL
+      `)
+      .all() as Array<{
+      message_id: string;
+      direction: Direction;
+      metadata_json: string | null;
+    }>;
+
+    const update = this.db.prepare(`
+      UPDATE messages
+      SET actor_role = ?, authorship_mode = ?
+      WHERE message_id = ?
+    `);
+
+    for (const row of rows) {
+      const metadata = parseJsonObject(row.metadata_json);
+      const source = readMetadataText(metadata, ["source"]);
+      const actorRole: MessageActorRole = row.direction === "inbound" ? "contact" : "user";
+      let authorshipMode: MessageAuthorshipMode = "connector_import";
+      if (source === "control_ui_manual_reply") {
+        authorshipMode = "manual_user";
+      } else if (source === "control_ui_manychat_send") {
+        authorshipMode = "assistant_send";
+      }
+      update.run(actorRole, authorshipMode, row.message_id);
     }
   }
 
@@ -1210,16 +1387,17 @@ export class PromoterCrmStore {
         handle,
         email,
         phone_e164,
-        profile_url,
-        reply_url,
-        avatar_url,
-        normalized_value,
-        source,
-        is_primary,
-        confidence,
+          profile_url,
+          reply_url,
+          avatar_url,
+          identity_role,
+          normalized_value,
+          source,
+          is_primary,
+          confidence,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(channel, normalized_value) DO UPDATE SET
         contact_id = excluded.contact_id,
         external_id = excluded.external_id,
@@ -1229,6 +1407,7 @@ export class PromoterCrmStore {
         profile_url = COALESCE(excluded.profile_url, contact_identities.profile_url),
         reply_url = COALESCE(excluded.reply_url, contact_identities.reply_url),
         avatar_url = COALESCE(excluded.avatar_url, contact_identities.avatar_url),
+        identity_role = COALESCE(excluded.identity_role, contact_identities.identity_role),
         source = excluded.source,
         is_primary = excluded.is_primary,
         confidence = excluded.confidence,
@@ -1250,6 +1429,7 @@ export class PromoterCrmStore {
         maybeUrl(identity.profileUrl),
         maybeUrl(identity.replyUrl),
         maybeUrl(identity.avatarUrl),
+        identity.identityRole ?? "lead",
         normalizedValue,
         maybeString(identity.source),
         identity.isPrimary ? 1 : 0,
@@ -1884,6 +2064,9 @@ export class PromoterCrmStore {
   private upsertConversation(params: {
     contactId: string;
     channel: IdentityChannel;
+    logicalChannel?: IdentityChannel;
+    transport?: ConversationTransport;
+    conversationRole?: ConversationRole;
     externalThreadId?: string;
     occurredAt: string;
   }): string | null {
@@ -1907,15 +2090,21 @@ export class PromoterCrmStore {
           conversation_id,
           contact_id,
           channel,
+          logical_channel,
+          transport,
+          conversation_role,
           external_thread_id,
           status,
           started_at,
           last_message_at,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(channel, external_thread_id) DO UPDATE SET
           contact_id = excluded.contact_id,
+          logical_channel = COALESCE(excluded.logical_channel, conversations.logical_channel),
+          transport = COALESCE(excluded.transport, conversations.transport),
+          conversation_role = COALESCE(excluded.conversation_role, conversations.conversation_role),
           last_message_at = excluded.last_message_at,
           updated_at = excluded.updated_at
       `)
@@ -1923,6 +2112,9 @@ export class PromoterCrmStore {
         conversationId,
         params.contactId,
         params.channel,
+        maybeString(params.logicalChannel),
+        maybeString(params.transport),
+        maybeString(params.conversationRole ?? "crm"),
         threadId,
         "active",
         params.occurredAt,
@@ -1937,6 +2129,8 @@ export class PromoterCrmStore {
   private upsertMessage(params: {
     conversationId: string;
     direction?: Direction;
+    actorRole?: MessageActorRole;
+    authorshipMode?: MessageAuthorshipMode;
     externalMessageId?: string;
     status?: string;
     content?: string;
@@ -1966,14 +2160,18 @@ export class PromoterCrmStore {
           conversation_id,
           external_message_id,
           direction,
+          actor_role,
+          authorship_mode,
           status,
           content,
           sent_at,
           metadata_json,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(conversation_id, external_message_id) DO UPDATE SET
           direction = excluded.direction,
+          actor_role = COALESCE(excluded.actor_role, messages.actor_role),
+          authorship_mode = COALESCE(excluded.authorship_mode, messages.authorship_mode),
           status = excluded.status,
           content = excluded.content,
           sent_at = excluded.sent_at,
@@ -1984,6 +2182,8 @@ export class PromoterCrmStore {
         params.conversationId,
         externalMessageId,
         params.direction ?? "outbound",
+        maybeString(params.actorRole),
+        maybeString(params.authorshipMode),
         maybeString(params.status),
         maybeString(params.content),
         params.occurredAt,
@@ -2001,12 +2201,14 @@ export class PromoterCrmStore {
       this.getContactRow(input.contactId);
       const occurredAt = input.occurredAt ?? nowIso();
       let conversationId = maybeString(input.conversationId);
-      let conversationChannel: IdentityChannel | null = maybeString(input.channel) as IdentityChannel | null;
+      let conversationChannel: IdentityChannel | null = maybeString(
+        input.channel,
+      ) as IdentityChannel | null;
 
       if (conversationId) {
         const existingConversation = this.db
           .prepare(`
-            SELECT conversation_id, contact_id, channel
+            SELECT conversation_id, contact_id, channel, logical_channel, transport, conversation_role
             FROM conversations
             WHERE conversation_id = ?
           `)
@@ -2021,9 +2223,19 @@ export class PromoterCrmStore {
         }
         conversationChannel = existingConversation.channel ?? conversationChannel ?? null;
       } else if (input.channel && input.conversationExternalId) {
+        const identities = this.listContactIdentities(input.contactId);
         conversationId = this.upsertConversation({
           contactId: input.contactId,
           channel: input.channel,
+          logicalChannel:
+            input.logicalChannel ??
+            inferConversationLogicalChannel({
+              identities,
+              transportChannel: input.channel,
+              storedLogicalChannel: undefined,
+            }),
+          transport: input.transport ?? resolveConversationTransport(input.channel),
+          conversationRole: input.conversationRole ?? "crm",
           externalThreadId: input.conversationExternalId,
           occurredAt,
         });
@@ -2045,6 +2257,8 @@ export class PromoterCrmStore {
           ? this.upsertMessage({
               conversationId,
               direction: input.direction,
+              actorRole: input.actorRole ?? (input.direction === "inbound" ? "contact" : "user"),
+              authorshipMode: input.authorshipMode ?? "connector_import",
               externalMessageId: input.messageExternalId,
               status: input.messageStatus,
               content: input.content,
@@ -2596,8 +2810,18 @@ export class PromoterCrmStore {
           interactionId,
           contactId: contact.contactId,
           channel: "manychat",
+          logicalChannel: contactHasIdentityChannel(
+            (preparedInput.identities ?? []).map((identity) => ({ channel: identity.channel })),
+            "instagram",
+          )
+            ? "instagram"
+            : "manychat",
+          transport: "manychat",
+          conversationRole: "crm",
           kind: interactionKind,
           direction: message.direction,
+          actorRole: message.direction === "inbound" ? "contact" : "user",
+          authorshipMode: "connector_import",
           summary,
           occurredAt,
           conversationExternalId: message.externalThreadId ?? parsed.externalThreadId,
@@ -2682,6 +2906,144 @@ export class PromoterCrmStore {
       sourceLabel: params.jsonPath,
       initiatedBy: params.initiatedBy,
     });
+  }
+
+  importBlueBubblesPayload(input: ImportBlueBubblesInput): {
+    ingestJobId: string;
+    source: IngestSource;
+    fileName: string | null;
+    contactsImported: number;
+    stats: Record<string, number>;
+    items: Array<Record<string, unknown>>;
+  } {
+    const ingestJob = this.createIngestJob({
+      source: "imessage",
+      sourceLabel: input.sourceLabel,
+      fileName: input.fileName,
+      initiatedBy: input.initiatedBy,
+    });
+    const stats = {
+      contactsCreated: 0,
+      contactsUpdated: 0,
+      contactsSkipped: 0,
+      contactsFailed: 0,
+      messagesImported: 0,
+      interactionsLogged: 0,
+    };
+    const items: Array<Record<string, unknown>> = [];
+
+    try {
+      const messageDrafts = parseBlueBubblesMessageQueryPayload(input.payload);
+      const messageKeys = new Set(
+        messageDrafts.map((draft) => draft.externalThreadId || draft.externalContactId || ""),
+      );
+      const chatDrafts = input.chatPayload
+        ? parseBlueBubblesChatQueryPayload(input.chatPayload).filter((draft) => {
+            const key = draft.externalThreadId || draft.externalContactId || "";
+            return key ? !messageKeys.has(key) : true;
+          })
+        : [];
+      const drafts = [...messageDrafts, ...chatDrafts];
+      for (const draft of drafts) {
+        if (!draft.input) {
+          stats.contactsSkipped += 1;
+          continue;
+        }
+
+        const preparedInput = this.prepareImportedContactInput({
+          ...draft.input,
+          createdBy: input.initiatedBy,
+        });
+        const contact = this.upsertContact(preparedInput);
+        if (contact.action === "created") {
+          stats.contactsCreated += 1;
+        } else {
+          stats.contactsUpdated += 1;
+        }
+
+        items.push({
+          action: contact.action,
+          contactId: contact.contactId,
+          displayName: contact.displayName,
+          externalId: draft.externalContactId ?? null,
+          threadId: draft.externalThreadId ?? null,
+          messageCount: draft.messages.length,
+        });
+        this.appendIngestJobItem({
+          ingestJobId: ingestJob.ingestJobId,
+          externalId: draft.externalContactId ?? draft.externalThreadId,
+          action: contact.action,
+          resolvedContactId: contact.contactId,
+          rawPayload: draft.metadata,
+        });
+
+        for (const message of draft.messages) {
+          const occurredAt = message.occurredAt ?? nowIso();
+          const stableMessageId =
+            maybeString(message.externalMessageId) ??
+            buildStableImportId("bluebubbles-message", [
+              draft.externalContactId,
+              draft.externalThreadId,
+              message.direction,
+              occurredAt,
+              message.content,
+            ]);
+          const interactionId = buildStableImportId("bluebubbles-interaction", [
+            draft.externalThreadId,
+            stableMessageId,
+            message.direction,
+          ]);
+
+          this.logInteraction({
+            interactionId,
+            contactId: contact.contactId,
+            channel: "imessage",
+            logicalChannel: "imessage",
+            transport: "bluebubbles",
+            conversationRole: "crm",
+            kind: message.direction === "inbound" ? "reply" : "outreach",
+            direction: message.direction,
+            actorRole: message.direction === "inbound" ? "contact" : "user",
+            authorshipMode: "connector_import",
+            summary: `BlueBubbles ${message.direction}: ${message.content.slice(0, 120)}`,
+            occurredAt,
+            conversationExternalId: message.externalThreadId ?? draft.externalThreadId,
+            messageExternalId: stableMessageId,
+            messageStatus: message.status,
+            content: message.content,
+            metadata: {
+              ...draft.metadata,
+              bluebubbles_message: message.metadata ?? null,
+            },
+          });
+          stats.messagesImported += 1;
+          stats.interactionsLogged += 1;
+        }
+      }
+
+      this.finishIngestJob({
+        ingestJobId: ingestJob.ingestJobId,
+        status: "completed",
+        stats,
+      });
+
+      return {
+        ingestJobId: ingestJob.ingestJobId,
+        source: "imessage",
+        fileName: maybeString(input.fileName),
+        contactsImported: stats.contactsCreated + stats.contactsUpdated,
+        stats,
+        items,
+      };
+    } catch (err) {
+      stats.contactsFailed += 1;
+      this.finishIngestJob({
+        ingestJobId: ingestJob.ingestJobId,
+        status: "failed",
+        stats,
+      });
+      throw err;
+    }
   }
 
   rankFollowups(input: RankFollowupsInput): {
@@ -2950,6 +3312,7 @@ export class PromoterCrmStore {
           profile_url,
           reply_url,
           avatar_url,
+          identity_role,
           source,
           is_primary,
           confidence,
@@ -3028,21 +3391,13 @@ export class PromoterCrmStore {
       params.push(input.contactId);
       if (input.channel) {
         if (input.channel === "instagram") {
-          filters.push(`(
-            ci.channel = ?
-            OR (
-              ci.channel = 'manychat'
-              AND EXISTS (
-                SELECT 1
-                FROM contact_identities ci2
-                WHERE ci2.contact_id = ci.contact_id
-                  AND ci2.channel = ?
-              )
-            )
-          )`);
-          params.push("instagram", "instagram");
+          filters.push("COALESCE(ci.logical_channel, ci.channel) = ?");
+          params.push("instagram");
+        } else if (input.channel === "manychat") {
+          filters.push("COALESCE(ci.transport, ci.channel) = ?");
+          params.push("manychat");
         } else {
-          filters.push("ci.channel = ?");
+          filters.push("COALESCE(ci.logical_channel, ci.channel) = ?");
           params.push(input.channel);
         }
       }
@@ -3066,6 +3421,9 @@ export class PromoterCrmStore {
             LIMIT 1
           ) AS latest_score,
           ci.channel,
+          ci.logical_channel,
+          ci.transport,
+          ci.conversation_role,
           ci.external_thread_id,
           ci.conversation_status,
           ci.started_at,
@@ -3103,21 +3461,13 @@ export class PromoterCrmStore {
 
     if (input.channel) {
       if (input.channel === "instagram") {
-        filters.push(`(
-          ci.channel = ?
-          OR (
-            ci.channel = 'manychat'
-            AND EXISTS (
-              SELECT 1
-              FROM contact_identities ci2
-              WHERE ci2.contact_id = ci.contact_id
-                AND ci2.channel = ?
-            )
-          )
-        )`);
-        params.push("instagram", "instagram");
+        filters.push("COALESCE(ci.logical_channel, ci.channel) = ?");
+        params.push("instagram");
+      } else if (input.channel === "manychat") {
+        filters.push("COALESCE(ci.transport, ci.channel) = ?");
+        params.push("manychat");
       } else {
-        filters.push("ci.channel = ?");
+        filters.push("COALESCE(ci.logical_channel, ci.channel) = ?");
         params.push(input.channel);
       }
     }
@@ -3154,6 +3504,9 @@ export class PromoterCrmStore {
             LIMIT 1
           ) AS latest_score,
           ci.channel,
+          ci.logical_channel,
+          ci.transport,
+          ci.conversation_role,
           ci.external_thread_id,
           ci.conversation_status,
           ci.started_at,
@@ -3191,6 +3544,8 @@ export class PromoterCrmStore {
         identities,
         row.channel,
         input.channel,
+        row.logical_channel,
+        row.transport,
       );
       return {
         conversationId: row.conversation_id,
@@ -3198,6 +3553,9 @@ export class PromoterCrmStore {
         contactName: row.contact_name,
         channel: row.channel,
         matchedChannel: channelContext.matchedChannel,
+        logicalChannel: channelContext.logicalChannel,
+        transport: channelContext.transport,
+        conversationRole: row.conversation_role ?? "crm",
         channelLabel: channelContext.channelLabel,
         externalThreadId: row.external_thread_id,
         status: row.conversation_status,
@@ -3246,12 +3604,92 @@ export class PromoterCrmStore {
     };
   }
 
+  private listContactConversationTabs(
+    contactId: string,
+    requestedChannel?: IdentityChannel,
+  ): Array<Record<string, unknown>> {
+    const rows = this.db
+      .prepare(`
+        SELECT
+          ci.conversation_id,
+          ci.contact_id,
+          ci.contact_name,
+          ci.channel,
+          ci.logical_channel,
+          ci.transport,
+          ci.conversation_role,
+          ci.external_thread_id,
+          ci.conversation_status,
+          ci.started_at,
+          ci.last_message_at,
+          ci.last_message_id,
+          ci.last_message_direction,
+          ci.last_message_status,
+          ci.last_message_content,
+          ci.last_message_sent_at,
+          ci.last_inbound_message_id,
+          ci.last_inbound_content,
+          ci.last_inbound_at,
+          ci.last_outbound_message_id,
+          ci.last_outbound_content,
+          ci.last_outbound_at,
+          ci.total_message_count,
+          ci.inbound_message_count,
+          ci.outbound_message_count
+        FROM conversation_inbox ci
+        WHERE ci.contact_id = ?
+        ORDER BY COALESCE(ci.last_inbound_at, ci.last_message_sent_at, ci.last_message_at) DESC
+      `)
+      .all(contactId) as InboxConversationRow[];
+    const identities = this.listContactIdentities(contactId);
+
+    return rows.map((row) => {
+      const channelContext = describeConversationChannelContext(
+        identities,
+        row.channel,
+        requestedChannel,
+        row.logical_channel,
+        row.transport,
+      );
+      const lastMessage = presentMessageContent(row.last_message_content);
+      return {
+        conversationId: row.conversation_id,
+        channel: row.channel,
+        matchedChannel: channelContext.matchedChannel,
+        logicalChannel: channelContext.logicalChannel,
+        transport: channelContext.transport,
+        conversationRole: row.conversation_role ?? "crm",
+        channelLabel: channelContext.channelLabel,
+        lastActivityAt: row.last_inbound_at ?? row.last_message_sent_at ?? row.last_message_at,
+        needsReply: row.last_message_direction === "inbound",
+        replyUrl: channelContext.replyUrl,
+        profileUrl: channelContext.profileUrl,
+        counts: {
+          totalMessages: row.total_message_count,
+          inboundMessages: row.inbound_message_count,
+          outboundMessages: row.outbound_message_count,
+        },
+        lastMessage: {
+          messageId: row.last_message_id,
+          direction: row.last_message_direction,
+          status: row.last_message_status,
+          content: row.last_message_content,
+          contentType: lastMessage.contentType,
+          preview: lastMessage.preview,
+          attachmentUrls: lastMessage.attachmentUrls,
+          sentAt: row.last_message_sent_at ?? row.last_message_at,
+        },
+      };
+    });
+  }
+
   getConversationThread(input: GetConversationThreadInput): {
     contact: Record<string, unknown>;
     identities: Array<Record<string, unknown>>;
     tags: string[];
     latestScore: LatestScoreRow | null;
     conversation: Record<string, unknown>;
+    conversationTabs: Array<Record<string, unknown>>;
     messages: Array<Record<string, unknown>>;
     interactions: Array<Record<string, unknown>>;
     followupTasks: Array<Record<string, unknown>>;
@@ -3271,9 +3709,15 @@ export class PromoterCrmStore {
       identities,
       conversationRow.channel,
       input.channel,
+      conversationRow.logical_channel,
+      conversationRow.transport,
     );
     const tags = this.listContactTags(conversationRow.contact_id);
     const followupTasks = this.listOpenFollowupTasks(conversationRow.contact_id, 10);
+    const conversationTabs = this.listContactConversationTabs(
+      conversationRow.contact_id,
+      input.channel,
+    );
     const limit = Math.max(1, Math.min(input.limit ?? 50, 200));
 
     const messageRows = this.db
@@ -3282,6 +3726,8 @@ export class PromoterCrmStore {
           message_id,
           external_message_id,
           direction,
+          actor_role,
+          authorship_mode,
           status,
           content,
           sent_at,
@@ -3300,6 +3746,8 @@ export class PromoterCrmStore {
         messageId: row.message_id,
         externalMessageId: row.external_message_id,
         direction: row.direction,
+        actorRole: row.actor_role,
+        authorshipMode: row.authorship_mode,
         status: row.status,
         content: row.content,
         contentType: presentation.contentType,
@@ -3370,6 +3818,9 @@ export class PromoterCrmStore {
         contactId: conversationRow.contact_id,
         channel: conversationRow.channel,
         matchedChannel: channelContext.matchedChannel,
+        logicalChannel: channelContext.logicalChannel,
+        transport: channelContext.transport,
+        conversationRole: conversationRow.conversation_role ?? "crm",
         channelLabel: channelContext.channelLabel,
         externalThreadId: conversationRow.external_thread_id,
         status: conversationRow.conversation_status,
@@ -3408,6 +3859,7 @@ export class PromoterCrmStore {
         replyUrl: channelContext.replyUrl,
         profileUrl: channelContext.profileUrl,
       },
+      conversationTabs,
       messages,
       interactions,
       followupTasks,
@@ -3463,19 +3915,25 @@ export class PromoterCrmStore {
       (typeof contact.displayName === "string" && contact.displayName.trim()) || contactId;
     const conversationId =
       typeof conversation.conversationId === "string" ? conversation.conversationId : "";
+    const transportValue =
+      (typeof conversation.transport === "string" && conversation.transport.trim()) || "";
     const transportChannel =
-      (typeof conversation.channel === "string" &&
-        readIdentityChannel(conversation.channel as IdentityChannel)) ||
-      "manychat";
-    const inferredInstagramChannel =
-      transportChannel === "manychat" && contactHasIdentityChannel(identities, "instagram");
+      transportValue === "manychat"
+        ? "manychat"
+        : (typeof conversation.channel === "string" &&
+            readIdentityChannel(conversation.channel as IdentityChannel)) ||
+          "manychat";
+    if (transportChannel !== "manychat") {
+      throw new Error("This conversation is not backed by ManyChat transport.");
+    }
+    const inferredInstagramChannel = contactHasIdentityChannel(identities, "instagram");
     const resolvedMatchedChannel =
       typeof conversation.matchedChannel === "string"
         ? readIdentityChannel(conversation.matchedChannel as IdentityChannel)
         : null;
     const matchedChannel = inferredInstagramChannel
       ? "instagram"
-      : resolvedMatchedChannel ?? transportChannel;
+      : (resolvedMatchedChannel ?? transportChannel);
     const externalThreadIdRaw =
       (typeof conversation.externalThreadId === "string" && conversation.externalThreadId) ||
       (typeof conversation.replyUrl === "string" && conversation.replyUrl) ||

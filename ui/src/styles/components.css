@@ -3946,6 +3946,45 @@
   flex-wrap: wrap;
 }
 
+.crm-conversation-tabs {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.crm-conversation-tab {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 14px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  background: color-mix(in srgb, var(--secondary) 64%, transparent);
+  color: var(--text);
+  text-align: left;
+}
+
+.crm-conversation-tab--active {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, white 4%, transparent), transparent),
+    color-mix(in srgb, var(--accent) 12%, var(--secondary));
+}
+
+.crm-conversation-tab__label {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.crm-conversation-tab__preview {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
 .crm-thread__status-row {
   display: flex;
   gap: 8px;

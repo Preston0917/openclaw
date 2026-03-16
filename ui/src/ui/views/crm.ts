@@ -260,6 +260,52 @@ function renderThreadHeader(thread: CrmConversationThread) {
   `;
 }
 
+function renderConversationTabs(
+  thread: CrmConversationThread,
+  selectedConversationId: string | null,
+  onSelectConversation: (conversationId: string) => void,
+) {
+  const tabs = Array.isArray(thread.conversationTabs) ? thread.conversationTabs : [];
+  if (tabs.length <= 1) {
+    return nothing;
+  }
+  return html`
+    <div class="crm-conversation-tabs">
+      ${tabs.map((tab) => {
+        const conversationId = stringifyValue(tab.conversationId);
+        const label =
+          stringifyValue(tab.channelLabel) || stringifyValue(tab.matchedChannel) || "conversation";
+        const lastMessage =
+          tab.lastMessage && typeof tab.lastMessage === "object"
+            ? (tab.lastMessage as Record<string, unknown>)
+            : null;
+        const preview = stringifyValue(lastMessage?.preview);
+        return html`
+          <button
+            type="button"
+            class="crm-conversation-tab ${selectedConversationId === conversationId ? "crm-conversation-tab--active" : ""}"
+            @click=${() => onSelectConversation(conversationId)}
+          >
+            <span class="crm-conversation-tab__label">${label}</span>
+            ${
+              tab.needsReply
+                ? html`
+                    <span class="crm-pill crm-pill--urgent">Needs reply</span>
+                  `
+                : nothing
+            }
+            ${
+              preview
+                ? html`<span class="crm-conversation-tab__preview">${preview}</span>`
+                : nothing
+            }
+          </button>
+        `;
+      })}
+    </div>
+  `;
+}
+
 function renderMessage(message: Record<string, unknown>) {
   const direction = stringifyValue(message.direction);
   const preview = formatMessageBody(message);
@@ -327,7 +373,9 @@ export function renderCrm(props: CrmProps) {
   const needsReplyCount = props.inboxItems.filter((item) => item.needsReply).length;
   const allCount = props.inboxItems.length;
   const conversation = props.thread?.conversation;
-  const canSend = stringifyValue(conversation?.channel) === "manychat";
+  const canSend =
+    stringifyValue(conversation?.transport) === "manychat" ||
+    stringifyValue(conversation?.channel) === "manychat";
   const needsReply = conversation?.needsReply === true;
   const followupTasks = Array.isArray(props.thread?.followupTasks)
     ? props.thread.followupTasks
@@ -416,6 +464,11 @@ export function renderCrm(props: CrmProps) {
           props.thread
             ? html`
                 ${renderThreadHeader(props.thread)}
+                ${renderConversationTabs(
+                  props.thread,
+                  props.selectedConversationId,
+                  props.onSelectConversation,
+                )}
 
                 <div class="crm-thread__status-row">
                   ${

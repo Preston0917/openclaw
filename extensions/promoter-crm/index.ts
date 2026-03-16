@@ -4,9 +4,9 @@ import type {
   OpenClawPluginService,
 } from "openclaw/plugin-sdk/core";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/core";
+import { registerPromoterCrmGatewayMethods } from "./src/gateway-methods.js";
 import { createManychatWebhookHandler } from "./src/manychat-webhook.js";
 import { PROMOTER_CRM_AGENT_GUIDANCE } from "./src/prompt-guidance.js";
-import { registerPromoterCrmGatewayMethods } from "./src/gateway-methods.js";
 import {
   type IdentityChannel,
   resolvePromoterCrmPaths,
@@ -30,6 +30,115 @@ import {
   createPromoterCrmUpsertInviteTool,
   createPromoterCrmUpsertSegmentTool,
 } from "./src/tools.js";
+
+async function fetchBlueBubblesMessageQueryPage(params: {
+  serverUrl: string;
+  password: string;
+  limit: number;
+  offset: number;
+  afterMs?: number;
+}): Promise<{ data: unknown[]; metadata?: Record<string, unknown> }> {
+  const baseUrl = params.serverUrl.trim().replace(/\/+$/, "");
+  const url = new URL("/api/v1/message/query", `${baseUrl}/`);
+  url.searchParams.set("password", params.password.trim());
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      after: Math.max(0, Math.floor(params.afterMs ?? 0)),
+      limit: Math.max(1, Math.min(Math.floor(params.limit), 1_000)),
+      offset: Math.max(0, Math.floor(params.offset)),
+      sort: "ASC",
+      with: ["attachments", "chats", "chat.participants", "handle", "sender"],
+    }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`BlueBubbles sync failed (${response.status}): ${text || "unknown error"}`);
+  }
+  const payload = (await response.json()) as { data?: unknown; metadata?: Record<string, unknown> };
+  return {
+    data: Array.isArray(payload.data) ? payload.data : [],
+    metadata: payload.metadata,
+  };
+}
+
+async function fetchBlueBubblesMessageQuery(params: {
+  serverUrl: string;
+  password: string;
+  limit: number;
+  afterMs?: number;
+}): Promise<unknown> {
+  const maxRecords = Math.max(1, Math.floor(params.limit));
+  const all: unknown[] = [];
+  let offset = 0;
+  while (all.length < maxRecords) {
+    const remaining = maxRecords - all.length;
+    const page = await fetchBlueBubblesMessageQueryPage({
+      ...params,
+      limit: Math.min(remaining, 1_000),
+      offset,
+    });
+    all.push(...page.data);
+    if (page.data.length === 0 || page.data.length < Math.min(remaining, 1_000)) {
+      break;
+    }
+    offset += page.data.length;
+  }
+  return {
+    status: 200,
+    message: "Success",
+    data: all,
+    metadata: { count: all.length, offset: 0, limit: maxRecords, total: all.length },
+  };
+}
+
+async function fetchBlueBubblesChatQuery(params: {
+  serverUrl: string;
+  password: string;
+  limit: number;
+}): Promise<unknown> {
+  const baseUrl = params.serverUrl.trim().replace(/\/+$/, "");
+  const url = new URL("/api/v1/chat/query", `${baseUrl}/`);
+  url.searchParams.set("password", params.password.trim());
+  const all: unknown[] = [];
+  const maxRecords = Math.max(1, Math.floor(params.limit));
+  let offset = 0;
+  while (all.length < maxRecords) {
+    const remaining = maxRecords - all.length;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        limit: Math.min(remaining, 500),
+        offset,
+        with: ["participants"],
+      }),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `BlueBubbles chat sync failed (${response.status}): ${text || "unknown error"}`,
+      );
+    }
+    const payload = (await response.json()) as {
+      data?: unknown;
+      metadata?: Record<string, unknown>;
+    };
+    const rows = Array.isArray(payload.data) ? payload.data : [];
+    all.push(...rows);
+    if (rows.length === 0 || rows.length < Math.min(remaining, 500)) {
+      break;
+    }
+    offset += rows.length;
+  }
+  return {
+    status: 200,
+    message: "Success",
+    data: all,
+    metadata: { count: all.length, offset: 0, limit: maxRecords, total: all.length },
+  };
+}
 
 function registerTools(api: OpenClawPluginApi): void {
   const tools: AnyAgentTool[] = [
@@ -112,6 +221,49 @@ function registerCli(api: OpenClawPluginApi): void {
         });
 
       crm
+        .command("sync-bluebubbles")
+        .description("Fetch BlueBubbles messages and import them into the promoter CRM")
+        .requiredOption(
+          "--server-url <url>",
+          "BlueBubbles server URL, such as http://127.0.0.1:1234",
+        )
+        .requiredOption("--password <password>", "BlueBubbles server password")
+        .option("--limit <n>", "Maximum messages to fetch", Number)
+        .option("--after-ms <n>", "Only fetch messages after this unix timestamp in ms", Number)
+        .option("--initiated-by <id>", "Operator or process identifier for audit logging")
+        .action(
+          async (options: {
+            serverUrl: string;
+            password: string;
+            limit?: number;
+            afterMs?: number;
+            initiatedBy?: string;
+          }) => {
+            const payload = await fetchBlueBubblesMessageQuery({
+              serverUrl: options.serverUrl,
+              password: options.password,
+              limit: options.limit ?? 250,
+              afterMs: options.afterMs,
+            });
+            const chatPayload = await fetchBlueBubblesChatQuery({
+              serverUrl: options.serverUrl,
+              password: options.password,
+              limit: 5_000,
+            });
+            const stateDir = api.runtime.state.resolveStateDir(process.env);
+            const result = await withPromoterCrmStore({ stateDir }, (store) =>
+              store.importBlueBubblesPayload({
+                payload,
+                chatPayload,
+                sourceLabel: options.serverUrl,
+                initiatedBy: options.initiatedBy,
+              }),
+            );
+            console.log(JSON.stringify(result, null, 2));
+          },
+        );
+
+      crm
         .command("followup-queue")
         .description("Refresh and show the ranked promoter CRM follow-up queue")
         .option("--limit <n>", "Maximum tasks to return", Number)
@@ -136,7 +288,11 @@ function registerCli(api: OpenClawPluginApi): void {
         .description("Show the most recent CRM conversations and inbound messages")
         .option("--limit <n>", "Maximum conversations to return", Number)
         .option("--channel <channel>", "Optional channel filter, such as manychat or instagram")
-        .option("--since-hours <n>", "Only include conversations active within this many hours", Number)
+        .option(
+          "--since-hours <n>",
+          "Only include conversations active within this many hours",
+          Number,
+        )
         .option(
           "--only-needs-reply",
           "Only return conversations where the latest message is inbound",
@@ -200,10 +356,7 @@ function registerCli(api: OpenClawPluginApi): void {
         .requiredOption("--text <text>", "Plain-text reply to send")
         .option("--message-tag <tag>", "Optional ManyChat message tag")
         .option("--otn-topic-name <name>", "Optional ManyChat One-Time Notification topic name")
-        .requiredOption(
-          "--confirm-send",
-          "Confirm that you explicitly want to send the message",
-        )
+        .requiredOption("--confirm-send", "Confirm that you explicitly want to send the message")
         .action(
           async (options: {
             conversationId?: string;

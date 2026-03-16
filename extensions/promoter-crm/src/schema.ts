@@ -24,18 +24,11 @@ export const PROMOTER_CRM_TABLES = [
 ] as const;
 
 function hasColumn(db: DatabaseSync, table: string, column: string): boolean {
-  const rows = db
-    .prepare(`PRAGMA table_info(${table})`)
-    .all() as Array<{ name?: string }>;
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: string }>;
   return rows.some((row) => row.name === column);
 }
 
-function ensureColumn(
-  db: DatabaseSync,
-  table: string,
-  column: string,
-  definition: string,
-): void {
+function ensureColumn(db: DatabaseSync, table: string, column: string, definition: string): void {
   if (!hasColumn(db, table, column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
   }
@@ -89,6 +82,7 @@ export function ensurePromoterCrmSchema(db: DatabaseSync): void {
   ensureColumn(db, "contact_identities", "profile_url", "TEXT");
   ensureColumn(db, "contact_identities", "reply_url", "TEXT");
   ensureColumn(db, "contact_identities", "avatar_url", "TEXT");
+  ensureColumn(db, "contact_identities", "identity_role", "TEXT DEFAULT 'lead'");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS contact_merges (
@@ -282,6 +276,9 @@ export function ensurePromoterCrmSchema(db: DatabaseSync): void {
       UNIQUE(channel, external_thread_id)
     );
   `);
+  ensureColumn(db, "conversations", "logical_channel", "TEXT");
+  ensureColumn(db, "conversations", "transport", "TEXT");
+  ensureColumn(db, "conversations", "conversation_role", "TEXT DEFAULT 'crm'");
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_conversations_contact_updated
     ON conversations(contact_id, updated_at DESC);
@@ -305,6 +302,8 @@ export function ensurePromoterCrmSchema(db: DatabaseSync): void {
       UNIQUE(conversation_id, external_message_id)
     );
   `);
+  ensureColumn(db, "messages", "actor_role", "TEXT");
+  ensureColumn(db, "messages", "authorship_mode", "TEXT");
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_conversation_external
     ON messages(conversation_id, external_message_id)
@@ -318,13 +317,17 @@ export function ensurePromoterCrmSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_messages_direction_sent
     ON messages(direction, sent_at DESC);
   `);
+  db.exec("DROP VIEW IF EXISTS conversation_inbox;");
   db.exec(`
-    CREATE VIEW IF NOT EXISTS conversation_inbox AS
+    CREATE VIEW conversation_inbox AS
     SELECT
       conv.conversation_id,
       conv.contact_id,
       c.display_name AS contact_name,
       conv.channel,
+      conv.logical_channel,
+      conv.transport,
+      conv.conversation_role,
       conv.external_thread_id,
       conv.status AS conversation_status,
       conv.started_at,

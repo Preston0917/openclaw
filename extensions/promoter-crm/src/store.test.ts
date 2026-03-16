@@ -627,6 +627,198 @@ describe("promoter CRM store", () => {
     expect(conversation.channelLabel).toBe("instagram via manychat");
   });
 
+  it("unifies BlueBubbles iMessage imports onto an existing contact and exposes per-channel tabs", async () => {
+    const stateDir = await makeStateDir();
+    const result = withPromoterCrmStore({ stateDir }, (store) => {
+      const contact = store.upsertContact({
+        displayName: "Amanda Bracaj",
+        identities: [
+          {
+            channel: "manychat",
+            externalId: "1629294916",
+            isPrimary: true,
+            replyUrl: "https://app.manychat.com/fb3160512/chat/1629294916",
+          },
+          {
+            channel: "instagram",
+            handle: "@amandairl_",
+            profileUrl: "https://www.instagram.com/amandairl_/",
+          },
+          {
+            channel: "phone",
+            phoneE164: "+12125550155",
+          },
+        ],
+      });
+
+      store.logInteraction({
+        contactId: contact.contactId,
+        channel: "manychat",
+        logicalChannel: "instagram",
+        transport: "manychat",
+        conversationRole: "crm",
+        kind: "reply",
+        direction: "inbound",
+        actorRole: "contact",
+        authorshipMode: "connector_import",
+        summary: "Amanda asked about tonight on Instagram.",
+        content: "I wanna come out tn",
+        conversationExternalId: "https://app.manychat.com/fb3160512/chat/1629294916",
+        occurredAt: "2026-03-15T18:26:52.654Z",
+      });
+
+      const imported = store.importBlueBubblesPayload({
+        payload: {
+          data: [
+            {
+              guid: "bb-msg-1",
+              text: "Are you around later?",
+              isFromMe: false,
+              dateCreated: 1773659000000,
+              handle: {
+                address: "+12125550155",
+                displayName: "Amanda Bracaj",
+                service: "iMessage",
+              },
+              chats: [
+                {
+                  guid: "iMessage;-;+12125550155",
+                  chatIdentifier: "+12125550155",
+                  displayName: "Amanda Bracaj",
+                  participants: [
+                    {
+                      address: "+12125550155",
+                      displayName: "Amanda Bracaj",
+                      service: "iMessage",
+                    },
+                  ],
+                },
+              ],
+            },
+            {
+              guid: "bb-msg-2",
+              text: "Yeah text me when you're outside.",
+              isFromMe: true,
+              dateCreated: 1773659300000,
+              handle: {
+                address: "+12125550155",
+                displayName: "Amanda Bracaj",
+                service: "iMessage",
+              },
+              chats: [
+                {
+                  guid: "iMessage;-;+12125550155",
+                  chatIdentifier: "+12125550155",
+                  displayName: "Amanda Bracaj",
+                  participants: [
+                    {
+                      address: "+12125550155",
+                      displayName: "Amanda Bracaj",
+                      service: "iMessage",
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        sourceLabel: "bluebubbles-test",
+        initiatedBy: "codex-test",
+      });
+
+      const imessageInbox = store.getRecentInbox({
+        channel: "imessage",
+        limit: 10,
+      });
+      const thread = store.getConversationThread({
+        contactId: contact.contactId,
+        channel: "imessage",
+        limit: 10,
+      });
+
+      return { contact, imported, imessageInbox, thread };
+    });
+
+    const inbox = result.imessageInbox.conversations as Array<{
+      contactName: string;
+      matchedChannel: string;
+      transport: string;
+    }>;
+    const conversation = result.thread.conversation as {
+      matchedChannel: string;
+      logicalChannel: string;
+      transport: string;
+      channelLabel: string;
+    };
+    const tabs = result.thread.conversationTabs as Array<{
+      matchedChannel: string;
+      logicalChannel: string;
+      transport: string;
+      channelLabel: string;
+    }>;
+    const messages = result.thread.messages as Array<{
+      direction: string;
+      actorRole: string;
+      authorshipMode: string;
+      content: string;
+    }>;
+
+    expect(result.imported.contactsImported).toBe(1);
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0]?.contactName).toBe("Amanda Bracaj");
+    expect(inbox[0]?.matchedChannel).toBe("imessage");
+    expect(inbox[0]?.transport).toBe("bluebubbles");
+    expect(conversation.matchedChannel).toBe("imessage");
+    expect(conversation.logicalChannel).toBe("imessage");
+    expect(conversation.transport).toBe("bluebubbles");
+    expect(conversation.channelLabel).toBe("imessage");
+    expect(tabs).toHaveLength(2);
+    expect(tabs.map((entry) => `${entry.logicalChannel}:${entry.transport}`)).toEqual(
+      expect.arrayContaining(["instagram:manychat", "imessage:bluebubbles"]),
+    );
+    expect(messages).toHaveLength(2);
+    expect(messages[0]?.direction).toBe("inbound");
+    expect(messages[0]?.actorRole).toBe("contact");
+    expect(messages[0]?.authorshipMode).toBe("connector_import");
+    expect(messages[1]?.direction).toBe("outbound");
+    expect(messages[1]?.actorRole).toBe("user");
+    expect(messages[1]?.authorshipMode).toBe("connector_import");
+  });
+
+  it("seeds BlueBubbles chat contacts even when no messages are imported yet", async () => {
+    const stateDir = await makeStateDir();
+    const result = withPromoterCrmStore({ stateDir }, (store) => {
+      const imported = store.importBlueBubblesPayload({
+        payload: { data: [] },
+        chatPayload: {
+          data: [
+            {
+              guid: "iMessage;-;+15551234567",
+              chatIdentifier: "+15551234567",
+              displayName: "Yana",
+              participants: [
+                {
+                  address: "+15551234567",
+                  displayName: "Yana",
+                  service: "iMessage",
+                },
+              ],
+            },
+          ],
+        },
+        sourceLabel: "bluebubbles-chat-seed",
+        initiatedBy: "codex-test",
+      });
+      const matches = store.findContacts({ query: "yana", limit: 10 });
+      return { imported, matches };
+    });
+
+    expect(result.imported.contactsImported).toBe(1);
+    expect(result.imported.stats.messagesImported).toBe(0);
+    expect(result.matches).toHaveLength(1);
+    expect(result.matches[0]?.display_name).toBe("Yana");
+  });
+
   it("ranks persisted follow-up tasks from invite urgency and stale outreach", async () => {
     const stateDir = await makeStateDir();
     const now = Date.now();
