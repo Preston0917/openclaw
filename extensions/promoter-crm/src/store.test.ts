@@ -90,6 +90,26 @@ describe("promoter CRM store", () => {
     expect(tags).toEqual(["birthday", "vip"]);
   });
 
+  it("preserves an existing contact name when a live transport update only has a raw identity", async () => {
+    const stateDir = await makeStateDir();
+    const result = withPromoterCrmStore({ stateDir }, (store) => {
+      const first = store.upsertContact({
+        displayName: "Marc Bieber",
+        identities: [{ channel: "phone", phoneE164: "+19295598248", isPrimary: true }],
+      });
+
+      const second = store.upsertContact({
+        displayName: "+19295598248",
+        identities: [{ channel: "imessage", phoneE164: "+19295598248", isPrimary: true }],
+      });
+
+      return store.getContact(second.contactId);
+    });
+
+    const contact = result.contact as { displayName: string };
+    expect(contact.displayName).toBe("Marc Bieber");
+  });
+
   it("creates events, invites, scores, and interaction history in one graph", async () => {
     const stateDir = await makeStateDir();
     const result = withPromoterCrmStore({ stateDir }, (store) => {

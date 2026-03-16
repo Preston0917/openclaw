@@ -205,7 +205,7 @@ function pushIdentity(
   });
 }
 
-function buildContactInput(params: {
+export function buildBlueBubblesContactInput(params: {
   address: string;
   displayName: string;
 }): UpsertContactInput | null {
@@ -309,7 +309,7 @@ export function parseBlueBubblesMessageQueryPayload(payload: unknown): BlueBubbl
   }
 
   return [...grouped.entries()].map(([externalThreadId, entry]) => ({
-    input: buildContactInput({
+    input: buildBlueBubblesContactInput({
       address: entry.address,
       displayName: entry.displayName,
     }),
@@ -381,7 +381,7 @@ export function parseBlueBubblesChatQueryPayload(payload: unknown): BlueBubblesC
     seen.add(dedupeKey);
 
     drafts.push({
-      input: buildContactInput({
+      input: buildBlueBubblesContactInput({
         address,
         displayName: resolveChatDisplayName(chat, address),
       }),

@@ -19,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/bluebubbles";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
+import { mirrorBlueBubblesMessageToPromoterCrm } from "./crm-mirror.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import { sendBlueBubblesMedia } from "./media-send.js";
 import {
@@ -515,6 +516,18 @@ export async function processMessage(
   };
 
   if (message.fromMe) {
+    await mirrorBlueBubblesMessageToPromoterCrm({
+      message,
+      config,
+      accountId: account.accountId,
+      isGroup,
+      isSelfChatMessage,
+      rawBody,
+    }).catch((err) => {
+      runtime.error?.(
+        `[bluebubbles] CRM live mirror failed sender=${message.senderId}: ${String(err)}`,
+      );
+    });
     // Cache from-me messages so reply context can resolve sender/body.
     cacheInboundMessage();
     const confirmedAssistantOutbound =
@@ -560,6 +573,19 @@ export async function processMessage(
     runtime,
     `msg sender=${message.senderId} group=${isGroup} textLen=${text.length} attachments=${attachments.length} chatGuid=${message.chatGuid ?? ""} chatId=${message.chatId ?? ""}`,
   );
+
+  await mirrorBlueBubblesMessageToPromoterCrm({
+    message,
+    config,
+    accountId: account.accountId,
+    isGroup,
+    isSelfChatMessage,
+    rawBody,
+  }).catch((err) => {
+    runtime.error?.(
+      `[bluebubbles] CRM live mirror failed sender=${message.senderId}: ${String(err)}`,
+    );
+  });
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const groupPolicy = account.config.groupPolicy ?? "allowlist";

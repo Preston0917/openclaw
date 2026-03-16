@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
+  buildBlueBubblesContactInput,
   parseBlueBubblesChatQueryPayload,
   parseBlueBubblesMessageQueryPayload,
 } from "./bluebubbles-import.js";
@@ -866,6 +867,27 @@ function chooseDisplayName(input: UpsertContactInput): string {
   );
 }
 
+function chooseExistingDisplayName(params: {
+  requestedDisplayName: string;
+  existingDisplayName?: string | null;
+  identities?: ContactIdentityInput[];
+}): string {
+  const requested = normalizeWhitespace(params.requestedDisplayName);
+  const existing = normalizeWhitespace(params.existingDisplayName);
+  if (!requested || !existing) {
+    return requested || existing || "Unknown Contact";
+  }
+  const requestedLower = normalizeLower(requested);
+  const identityFallbacks = new Set<string>();
+  for (const identity of params.identities ?? []) {
+    const normalized = normalizeIdentityValue(identity);
+    if (normalized) {
+      identityFallbacks.add(normalized);
+    }
+  }
+  return identityFallbacks.has(requestedLower) ? existing : requested;
+}
+
 function resolveOverallScore(input: RecordScoreInput): number {
   if (typeof input.overallScore === "number" && Number.isFinite(input.overallScore)) {
     return input.overallScore;
@@ -1354,14 +1376,30 @@ export class PromoterCrmStore {
       if (!normalizedValue) {
         continue;
       }
-      const rows = this.db
+      const exactRows = this.db
         .prepare(`
           SELECT contact_id
           FROM contact_identities
           WHERE channel = ? AND normalized_value = ?
         `)
         .all(identity.channel, normalizedValue) as Array<{ contact_id: string }>;
-      for (const row of rows) {
+      for (const row of exactRows) {
+        candidates.add(row.contact_id);
+      }
+      if (candidates.size > 0) {
+        continue;
+      }
+      if (!isNormalizedPhone(normalizedValue) && !isNormalizedEmail(normalizedValue)) {
+        continue;
+      }
+      const crossChannelRows = this.db
+        .prepare(`
+          SELECT contact_id
+          FROM contact_identities
+          WHERE normalized_value = ?
+        `)
+        .all(normalizedValue) as Array<{ contact_id: string }>;
+      for (const row of crossChannelRows) {
         candidates.add(row.contact_id);
       }
     }
@@ -1590,7 +1628,11 @@ export class PromoterCrmStore {
       const existing = this.db
         .prepare("SELECT * FROM contacts WHERE contact_id = ?")
         .get(contactId) as ContactRow | undefined;
-      const displayName = chooseDisplayName(input);
+      const displayName = chooseExistingDisplayName({
+        requestedDisplayName: chooseDisplayName(input),
+        existingDisplayName: existing?.display_name,
+        identities: input.identities,
+      });
 
       const firstName = maybeString(input.firstName) ?? existing?.first_name ?? null;
       const lastName = maybeString(input.lastName) ?? existing?.last_name ?? null;
@@ -3044,6 +3086,100 @@ export class PromoterCrmStore {
       });
       throw err;
     }
+  }
+
+  logBlueBubblesLiveMessage(input: {
+    accountId?: string;
+    senderAddress: string;
+    senderDisplayName?: string;
+    externalThreadId: string;
+    externalMessageId?: string;
+    direction: Direction;
+    occurredAt?: string;
+    status?: string;
+    content: string;
+    metadata?: Record<string, unknown>;
+    createdBy?: string;
+  }): {
+    contactId: string;
+    conversationId: string | null;
+    interactionId: string;
+    messageAction: "created" | "updated" | null;
+  } {
+    const preparedContact = buildBlueBubblesContactInput({
+      address: input.senderAddress,
+      displayName: input.senderDisplayName?.trim() || input.senderAddress,
+    });
+    if (!preparedContact) {
+      throw new Error("BlueBubbles live message requires a sender address.");
+    }
+    const contact = this.upsertContact({
+      ...preparedContact,
+      createdBy: input.createdBy,
+    });
+    const occurredAt = input.occurredAt ?? nowIso();
+    const stableMessageId =
+      maybeString(input.externalMessageId) ??
+      buildStableImportId("bluebubbles-live-message", [
+        input.accountId,
+        input.senderAddress,
+        input.externalThreadId,
+        input.direction,
+        occurredAt,
+        input.content,
+      ]);
+    const interactionId = buildStableImportId("bluebubbles-live-interaction", [
+      input.accountId,
+      input.externalThreadId,
+      stableMessageId,
+      input.direction,
+    ]);
+    this.logInteraction({
+      interactionId,
+      contactId: contact.contactId,
+      channel: "imessage",
+      logicalChannel: "imessage",
+      transport: "bluebubbles",
+      conversationRole: "crm",
+      kind: input.direction === "inbound" ? "reply" : "outreach",
+      direction: input.direction,
+      actorRole: input.direction === "inbound" ? "contact" : "user",
+      authorshipMode: input.direction === "inbound" ? "connector_import" : "manual_user",
+      summary: `BlueBubbles ${input.direction}: ${input.content.slice(0, 120)}`,
+      occurredAt,
+      conversationExternalId: input.externalThreadId,
+      messageExternalId: stableMessageId,
+      messageStatus: input.status,
+      content: input.content,
+      metadata: {
+        source: "bluebubbles-live",
+        accountId: input.accountId,
+        ...(input.metadata ?? {}),
+      },
+    });
+    const thread = this.getConversationThread({
+      contactId: contact.contactId,
+      channel: "imessage",
+      limit: 1,
+    });
+    const messages = Array.isArray(thread.messages)
+      ? (thread.messages as Array<Record<string, unknown>>)
+      : [];
+    const latestMessage =
+      messages.find((entry) => entry.externalMessageId === stableMessageId) ??
+      messages.find((entry) => entry.content === input.content);
+    return {
+      contactId: contact.contactId,
+      conversationId:
+        typeof (thread.conversation as Record<string, unknown>)?.conversationId === "string"
+          ? ((thread.conversation as Record<string, unknown>).conversationId as string)
+          : null,
+      interactionId,
+      messageAction:
+        typeof latestMessage?.messageAction === "string"
+          ? (latestMessage.messageAction as "created" | "updated")
+          : null,
+    };
   }
 
   rankFollowups(input: RankFollowupsInput): {
